@@ -1,0 +1,93 @@
+#prompts.yaml 
+ai:
+  generative_ai:
+    provider: "google"
+    google:
+      endpoint: "https://generativeai.googleapis.com"
+      max_tokens: 2000
+
+logging:
+  level: "INFO"
+  file_path: "logs/app.log"
+
+batch_processing:
+  enabled: true
+  batch_size: 20
+
+dynamic_token_adjustment:
+  enabled: true
+  max_tokens_threshold: 2500
+
+caching:
+  enabled: true
+  ttl: 7200
+  dir: "./cache"
+
+rate_limit:
+  default: "100 per hour"
+  parse_email: "10 per minute"
+
+parser:
+  prompt_template: |
+    [INST] You are a precise email parsing assistant. Extract and format the following information from the email below, matching the fields of our intake form exactly. Use only information explicitly stated in the email. Mark required fields with an asterisk (*). Use "N/A" if information is not found. Avoid repetition and keep the response concise.
+    
+    Email content:
+    {{email_content}}
+    
+    Limit your response to 300 tokens or fewer.
+    
+    Format the response exactly as follows:
+    
+    **ASSIGNER INFORMATION**
+    - Assigner Name*: 
+    - Assigner Email*: 
+    - Assigner Phone*: 
+    - Assigner Phone Extension: 
+    
+    **ASSIGNMENT INFORMATION**
+    - Claim Number*: 
+    - Policy Number: 
+    - Date of Loss*: 
+    - Client (Assigner's Company)*: 
+    - Insurance Carrier*: 
+    - Insured's Name*: 
+    - Insured's Phone Number 1*: 
+    - Insured's Phone Number 2: 
+    - Insured's Email: 
+    - Address of Risk Location*: 
+    - Is this related to a CAT event?*:
+    - CAT Event Name: 
+    
+    **ADDITIONAL PARTY INFORMATION**
+    - Additional Party Name: 
+    - Additional Party Company: 
+    - Additional Party Phone: 
+    - Additional Party Email: 
+    
+    **DESCRIPTION OF SERVICES NEEDED**
+    - Describe the services needed*: 
+    - Type of Expert Needed*: 
+    - Type of Damage*: 
+    - Areas of Property to Inspect*: 
+    
+    **QUESTIONS TO HELP US SPEED UP ASSIGNMENT PROCESSING**
+    - Is a budget required before proceeding?*:
+    - Number of Buildings/Units (if commercial): 
+    - Call Required Before Inspection: 
+    - Call Required After Inspection: 
+    - Repair Recommendations Needed: 
+    - Cost Estimate Required: 
+    - Permission for Third-Party Tarp Removal: 
+    - Tile Matching Information (for tile roof): 
+    - Roof Diagram Needed: 
+      
+    **OTHER**
+    - Notes/Comments: 
+    - Attachments: 
+    
+    Fill in each field with information from the email only. Use "N/A" if not found. [/INST]
+
+secrets:
+  gemini_api_key: "${GEMINI_API_KEY}"
+  gmail_api_credentials: "${GMAIL_API_CREDENTIALS}"
+  GOOGLE_APPLICATION_CREDENTIALS: "${GOOGLE_APPLICATION_CREDENTIALS}"

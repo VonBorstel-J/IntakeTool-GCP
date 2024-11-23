@@ -1,0 +1,37 @@
+/* styles.css */
+
+/* Status Indicator Styles */
+.status-indicator {
+    display: inline-block;
+    width: 15px;
+    height: 15px;
+    border-radius: 50%;
+}
+
+.status-active {
+    background-color: #28a745; /* Green */
+}
+
+.status-error {
+    background-color: #dc3545; /* Red */
+}
+
+/* Logs Section Styles */
+.logs-container {
+    height: 200px;
+    overflow-y: auto;
+    background-color: #f8f9fa;
+}
+
+/* Progress Steps Styles */
+#progress-steps .list-group-item {
+    border: none;
+    padding-left: 0;
+    padding-right: 0;
+}
+
+/* Parsed Results Styles */
+.accordion-item {
+    border: 1px solid #dee2e6;
+    border-radius: 0.25rem;
+}

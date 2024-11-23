@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Email Parser Tool</title>
+    <!-- Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <!-- Header -->
+    <header class="bg-primary text-white text-center py-3">
+        <h1>Email Parser Tool</h1>
+    </header>
+
+    <!-- Status Bar -->
+    <div class="container mt-3">
+        <div class="d-flex align-items-center">
+            <span id="status-indicator" class="status-indicator me-2"></span>
+            <span id="status-text">Checking status...</span>
+        </div>
+    </div>
+
+    <!-- Logs Section -->
+    <div class="container mt-3">
+        <h3>Logs</h3>
+        <div id="logs" class="logs-container border rounded p-2">
+            <!-- Log entries will appear here -->
+        </div>
+    </div>
+
+    <!-- Input Section -->
+    <div class="container mt-3">
+        <h3>Input</h3>
+        <!-- Tabs for Email ID and Custom Text Input -->
+        <ul class="nav nav-tabs" id="inputTabs" role="tablist">
+            <li class="nav-item" role="presentation">
+                <button class="nav-link active" id="email-id-tab" data-bs-toggle="tab" data-bs-target="#email-id" type="button" role="tab" aria-controls="email-id" aria-selected="true">Email ID Input</button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="custom-text-tab" data-bs-toggle="tab" data-bs-target="#custom-text" type="button" role="tab" aria-controls="custom-text" aria-selected="false">Custom Text Input</button>
+            </li>
+        </ul>
+        <div class="tab-content border border-top-0 p-3">
+            <!-- Email ID Input Tab -->
+            <div class="tab-pane fade show active" id="email-id" role="tabpanel" aria-labelledby="email-id-tab">
+                <form id="email-id-form">
+                    <div class="mb-3">
+                        <label for="emailIdInput" class="form-label">Enter Email ID</label>
+                        <input type="text" class="form-control" id="emailIdInput" placeholder="e.g., abc123@example.com" required>
+                    </div>
+                    <button type="submit" class="btn btn-primary">Parse Email ID</button>
+                </form>
+            </div>
+            <!-- Custom Text Input Tab -->
+            <div class="tab-pane fade" id="custom-text" role="tabpanel" aria-labelledby="custom-text-tab">
+                <form id="custom-text-form">
+                    <div class="mb-3">
+                        <label for="customTextInput" class="form-label">Paste Custom Text</label>
+                        <textarea class="form-control" id="customTextInput" rows="5" placeholder="Paste your text here..." required></textarea>
+                    </div>
+                    <button type="submit" class="btn btn-primary">Parse Custom Text</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Progress Display -->
+    <div class="container mt-3">
+        <h3>Parsing Progress</h3>
+        <div id="progress-container">
+            <div class="progress">
+                <div id="progress-bar" class="progress-bar" role="progressbar" style="width: 0%;">0%</div>
+            </div>
+            <ul id="progress-steps" class="list-group list-group-flush mt-2">
+                <!-- Progress steps will appear here -->
+            </ul>
+        </div>
+    </div>
+
+    <!-- Parsed Results Section -->
+    <div class="container mt-3">
+        <h3>Parsed Results</h3>
+        <div id="parsed-results" class="accordion" aria-multiselectable="true">
+            <!-- Parsed results will appear here -->
+        </div>
+    </div>
+
+    <!-- Bootstrap JS and dependencies -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <!-- Custom JS -->
+    <script src="app.js"></script>
+</body>
+</html>

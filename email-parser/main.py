@@ -14,6 +14,8 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 from typing import Any, Dict, List
 from gmail_utils import fetch_email, fetch_email_batch
 from gemini_utils import parse_email_content, call_gemini_api
+from google.cloud import bigquery
+from datetime import datetime
 
 import asyncio
 
@@ -83,41 +85,60 @@ async def read_status():
 async def parse_email(request: EmailRequest):
     email_id = request.email_id
     task_id = f"email_{email_id}"
+
+    # Initialize progress tracking
     parsing_progress[task_id] = {
-        "steps": ["Fetching Data", "Parsing Data", "Finalizing"],
-        "current_step": 0
+        "steps": ["Fetching Data", "Parsing Data", "Storing Data"],
+        "current_step": 0,
+        "status": "In Progress"
     }
+
     try:
-        logger.info(f"Fetching email with ID: {email_id}")
+        # Step 1: Fetch email
         email_content = await fetch_email(email_id)
         parsing_progress[task_id]["current_step"] = 1
-        logger.info(f"Successfully fetched email with ID: {email_id}")
-    except HTTPException as he:
-        logger.error(f"{ERROR_CODES['fetch_error']}: Failed to fetch email with ID {email_id}. Cause: {he.detail}")
-        parsing_progress.pop(task_id, None)
-        raise HTTPException(status_code=he.status_code, detail=create_error_response(ERROR_CODES['fetch_error'], "Failed to fetch email. Ensure the email ID is correct."))
-    except Exception as e:
-        logger.error(f"{ERROR_CODES['fetch_error']}: Failed to fetch email with ID {email_id}. Cause: {str(e)}")
-        parsing_progress.pop(task_id, None)
-        raise HTTPException(status_code=500, detail=create_error_response(ERROR_CODES['fetch_error'], "Failed to fetch email due to a server error. Please try again later."))
-    
-    try:
-        logger.info(f"Parsing email content for ID: {email_id}")
+
+        # Step 2: Parse email
         prompt = parse_email_content(email_content)
-        parsing_progress[task_id]["current_step"] = 2
         parsed_data = await call_gemini_api(prompt)
+        parsing_progress[task_id]["current_step"] = 2
+
+        # Step 3: Store results in BigQuery
+        await insert_raw_parsed_output(email_id, parsed_data)
         parsing_progress[task_id]["current_step"] = 3
-        logger.info(f"Successfully parsed email with ID: {email_id}")
-        parsing_progress.pop(task_id, None)
-        return {"parsed_data": parsed_data}
+        parsing_progress[task_id]["status"] = "Completed"
+
+        # Return success response
+        return {
+            "email_id": email_id,
+            "parsed_data": parsed_data,
+            "status": "Success"
+        }
+
     except HTTPException as he:
-        logger.error(f"{ERROR_CODES['parse_error']}: Parsing failed for email ID {email_id}. Cause: {he.detail}")
-        parsing_progress.pop(task_id, None)
-        raise HTTPException(status_code=he.status_code, detail=create_error_response(ERROR_CODES['parse_error'], "Failed to parse email. Please check the email content."))
+        logger.error(f"HTTPException at step {parsing_progress[task_id]['current_step']}: {he.detail}")
+        parsing_progress[task_id]["status"] = "Failed"
+        raise HTTPException(
+            status_code=he.status_code,
+            detail=create_error_response(
+                ERROR_CODES['parse_error'],
+                f"Operation failed at step {parsing_progress[task_id]['current_step']}: {he.detail}"
+            )
+        )
     except Exception as e:
-        logger.error(f"{ERROR_CODES['parse_error']}: Parsing failed for email ID {email_id}. Cause: {str(e)}")
-        parsing_progress.pop(task_id, None)
-        raise HTTPException(status_code=500, detail=create_error_response(ERROR_CODES['parse_error'], "Failed to parse email due to a server error. Please try again later."))
+        logger.error(f"Unexpected error at step {parsing_progress[task_id]['current_step']}: {str(e)}")
+        parsing_progress[task_id]["status"] = "Failed"
+        raise HTTPException(
+            status_code=500,
+            detail=create_error_response(
+                ERROR_CODES['server_error'],
+                f"Unexpected error at step {parsing_progress[task_id]['current_step']}: {str(e)}"
+            )
+        )
+    finally:
+        # Cleanup progress tracking only if completed or failed
+        if parsing_progress[task_id]["status"] in ["Completed", "Failed"]:
+            parsing_progress.pop(task_id, None)
 
 @app.post("/api/parse-text")
 @limiter.limit("5/minute")
@@ -209,6 +230,26 @@ async def process_batch(request: BatchEmailRequest):
             results.append({"email_id": email_id, "error": create_error_response(ERROR_CODES['parse_error'], f"Failed to parse email ID {email_id}.")})
             parsing_progress.pop(task_id, None)
     return {"results": results}
+
+async def insert_raw_parsed_output(email_id: str, raw_output: str, parser_version="1.0"):
+    client = bigquery.Client()
+    table_id = "forensicemailparser:email_parsing_dataset.raw_parsed_output"
+
+    rows_to_insert = [{
+        "email_id": email_id,
+        "parsed_timestamp": datetime.utcnow().isoformat(),  
+        "raw_parsed_output": raw_output,
+        "parser_version": parser_version
+    }]
+
+    loop = asyncio.get_running_loop()
+    try:
+        await loop.run_in_executor(None, client.insert_rows_json, table_id, rows_to_insert)
+        logger.info(f"Successfully inserted raw parsed output for email ID: {email_id}")
+    except Exception as e:
+        logger.error(f"Failed to insert raw parsed output for email ID {email_id}: {str(e)}. Data: {rows_to_insert}")
+        raise
+
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):

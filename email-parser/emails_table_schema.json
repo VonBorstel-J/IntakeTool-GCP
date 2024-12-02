@@ -1,0 +1,17 @@
+[
+    {"name": "email_id", "type": "STRING", "mode": "REQUIRED"},
+    {"name": "thread_id", "type": "STRING", "mode": "REQUIRED"}, 
+    {"name": "received_timestamp", "type": "TIMESTAMP", "mode": "REQUIRED"},
+    {"name": "sender_email", "type": "STRING", "mode": "REQUIRED"},
+    {"name": "recipient_email", "type": "STRING", "mode": "REPEATED"},
+    {"name": "subject", "type": "STRING", "mode": "NULLABLE"},
+    {"name": "email_body", "type": "STRING", "mode": "NULLABLE"}, 
+    {"name": "attachments", "type": "RECORD", "mode": "REPEATED", 
+    "fields": [
+    {"name": "attachment_name", "type": "STRING", "mode": "NULLABLE"},
+    {"name": "attachment_type", "type": "STRING", "mode": "NULLABLE"}, 
+    {"name": "attachment_size", "type": "INTEGER", "mode": "NULLABLE"}, 
+    {"name": "gcs_uri", "type": "STRING", "mode": "NULLABLE"}
+    ]},
+    {"name": "full_thread", "type": "STRING", "mode": "NULLABLE"} 
+]

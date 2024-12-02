@@ -85,7 +85,7 @@ parser:
     - Notes/Comments: 
     - Attachments: 
     
-    Fill in each field with information from the email only. Use "N/A" if not found. [/INST]
+    Fill in each field with information from the email only. Be resilient to typos and varied phrasing. Use "N/A" if not found. [/INST]
 
 secrets:
   gemini_api_key: "${GEMINI_API_KEY}"

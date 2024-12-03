@@ -28,7 +28,7 @@ steps:
         --member="user:jvonborstel@keystoneexperts.com" \
         --role="roles/run.invoker"
 
-# Optional: Set up monitoring/logging
+# Set up monitoring/logging
 - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
   entrypoint: "bash"
   args:

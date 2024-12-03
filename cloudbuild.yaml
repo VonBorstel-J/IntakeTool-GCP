@@ -7,12 +7,13 @@ steps:
 - name: "gcr.io/cloud-builders/docker"
   args: ["push", "gcr.io/$PROJECT_ID/email-parser:$SHORT_SHA"]
 
-# Deploy to Cloud Run
+# Retrieve GEMINI_API_KEY from Secret Manager and deploy to Cloud Run
 - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
   entrypoint: "bash"
   args:
     - "-c"
     - |
+      GEMINI_API_KEY=$(gcloud secrets versions access latest --secret=gemini-api-key) && \
       gcloud run deploy email-parser \
         --image gcr.io/$PROJECT_ID/email-parser:$SHORT_SHA \
         --region us-central1 \

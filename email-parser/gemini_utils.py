@@ -1,95 +1,114 @@
 #gemini_utils.py
-import os, yaml, logging, asyncio
-from typing import Dict, Any
-from dotenv import load_dotenv
+import os
+import yaml
+import asyncio
+from typing import Dict, Any, List
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
-from google.api_core.exceptions import GoogleAPICallError, RetryError
+from google.api_core.exceptions import GoogleAPICallError
 from google.cloud import aiplatform
-from fastapi import HTTPException
-from fastapi.responses import JSONResponse
+from config import get_logger, settings
+from exceptions import GeminiAPIError, PromptError, ParseError
 
-load_dotenv()
-logger = logging.getLogger("gemini_utils")
-logger.setLevel(logging.INFO)
-if not logger.handlers:
-    handler = logging.StreamHandler()
-    formatter = logging.Formatter('{"time": "%(asctime)s", "level": "%(levelname)s", "message": "%(message)s"}')
-    handler.setFormatter(formatter)
-    logger.addHandler(handler)
-ERROR_CODES = {"gemini_api_error": "ERR005", "prompt_error": "ERR006", "parse_error": "ERR002", "server_error": "ERR004"}
+logger = get_logger({"module": "gemini_utils"})
 
 def load_prompts(file_path: str = "prompts.yaml") -> Dict[str, str]:
     try:
         with open(file_path, 'r') as file:
             prompts = yaml.safe_load(file)
-            logger.info("Successfully loaded prompt templates from prompts.yaml.")
+            for template_name, template in prompts.items():
+                validate_prompt_template(template, required_keys=[])
             return prompts
-    except FileNotFoundError:
-        logger.error(f"{ERROR_CODES['prompt_error']}: prompts.yaml file not found.")
-        raise HTTPException(status_code=500, detail={"error": {"code": ERROR_CODES['prompt_error'], "message": "Prompt configuration file not found."}})
-    except yaml.YAMLError as e:
-        logger.error(f"{ERROR_CODES['prompt_error']}: YAML parsing error: {str(e)}")
-        raise HTTPException(status_code=500, detail={"error": {"code": ERROR_CODES['prompt_error'], "message": "Error parsing prompt configuration."}})
+    except Exception as e:
+        logger.error(f"Error loading prompts from {file_path}. Error: {e}")
+        raise PromptError("Failed to load prompts.")
+
+def validate_prompt_template(template: str, required_keys: List[str]):
+    for key in required_keys:
+        if f"{{{{{key}}}}}" not in template:
+            raise PromptError(f"Template missing required key: {key}")
+
+def validate_prompt_length(prompt: str, max_length: int = 5000) -> None:
+    if len(prompt) > max_length:
+        logger.error(f"Prompt length {len(prompt)} exceeds maximum allowed length {max_length}.")
+        raise PromptError("Prompt exceeds maximum length.")
 
 PROMPTS = load_prompts()
 
 def generate_prompt(template_name: str, context: Dict[str, Any]) -> str:
+    template = PROMPTS.get(template_name)
+    if not template:
+        logger.error(f"Template '{template_name}' not found.")
+        raise PromptError(f"Prompt template '{template_name}' not found.")
     try:
-        template = PROMPTS.get(template_name)
-        if not template:
-            logger.error(f"{ERROR_CODES['prompt_error']}: Template '{template_name}' not found.")
-            raise HTTPException(status_code=500, detail={"error": {"code": ERROR_CODES['prompt_error'], "message": f"Prompt template '{template_name}' not found."}})
         prompt = template.format(**context)
-        logger.info(f"Generated prompt using template '{template_name}'.")
+        validate_prompt_length(prompt)
         return prompt
     except KeyError as e:
-        logger.error(f"{ERROR_CODES['prompt_error']}: Missing key in context for prompt generation: {str(e)}")
-        raise HTTPException(status_code=500, detail={"error": {"code": ERROR_CODES['prompt_error'], "message": "Incomplete context for prompt generation."}})
+        logger.error(f"Missing key in context for template '{template_name}'. Context: {context}, Error: {e}")
+        raise PromptError(f"Missing key in context: {e}")
     except Exception as e:
-        logger.error(f"{ERROR_CODES['prompt_error']}: Unexpected error during prompt generation: {str(e)}")
-        raise HTTPException(status_code=500, detail={"error": {"code": ERROR_CODES['prompt_error'], "message": "Error generating prompt."}})
+        logger.error(f"Error generating prompt. Template: {template_name}, Context: {context}, Error: {e}")
+        raise PromptError("Error generating prompt.")
 
-def initialize_vertex_ai():
-    try:
-        project = os.getenv("GCP_PROJECT_ID", "your_project_id")
-        location = os.getenv("GCP_LOCATION", "us-central1")  # Ensure this matches a supported region
+def get_endpoint():
+    endpoint = None
+    def _get_endpoint():
+        nonlocal endpoint
+        if endpoint is not None:
+            return endpoint
         if os.getenv("MOCK_VERTEX_AI", "false").lower() == "true":
             logger.warning("Vertex AI is mocked for development.")
-            return
-        aiplatform.init(project=project, location=location)
-        logger.info("Initialized Vertex AI with project and location.")
-    except Exception as e:
-        logger.error(f"{ERROR_CODES['gemini_api_error']}: Failed to initialize Vertex AI. Cause: {str(e)}")
-        raise HTTPException(status_code=500, detail={"error": {"code": ERROR_CODES['gemini_api_error'], "message": "Failed to initialize AI platform."}})
+            return None
+        try:
+            aiplatform.init(project=settings.GCP_PROJECT_ID, location=settings.GCP_LOCATION)
+            endpoint_instance = aiplatform.Endpoint(endpoint_name=settings.GEMINI_ENDPOINT)
+            logger.info("Initialized Vertex AI endpoint.")
+            endpoint = endpoint_instance
+            return endpoint
+        except Exception as e:
+            logger.error(f"Failed to initialize Vertex AI. Error: {e}")
+            raise GeminiAPIError("Failed to initialize AI platform.")
+    return _get_endpoint
 
+get_endpoint = get_endpoint()
 
-initialize_vertex_ai()
-
-@retry(retry=retry_if_exception_type((GoogleAPICallError, RetryError)), stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10), reraise=True)
+@retry(
+    retry=retry_if_exception_type(GoogleAPICallError),
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=1, max=10),
+    reraise=True
+)
 async def call_gemini_api(prompt: str) -> Dict[str, Any]:
+    endpoint = get_endpoint()
+    if endpoint is None:
+        if os.getenv("MOCK_VERTEX_AI", "false").lower() == "true":
+            logger.info("MOCK_VERTEX_AI is enabled. Returning mock response.")
+            return {"predictions": ["Mock response"]}
+        else:
+            logger.error("Endpoint is not initialized.")
+            raise GeminiAPIError("Endpoint is not initialized.")
     try:
-        model_name = os.getenv("GEMINI_MODEL_NAME", "your_gemini_model_name")
-        endpoint = os.getenv("GEMINI_ENDPOINT", "projects/your_project_id/locations/your_location/endpoints/your_endpoint_id")
-        predictor = aiplatform.PipelineServiceClient()
-        response = await asyncio.to_thread(predictor.predict, endpoint=endpoint, instances=[{"prompt": prompt}])
-        logger.info("Successfully called Gemini API.")
+        # Expected response structure: {"predictions": [...]}
+        response = await asyncio.to_thread(endpoint.predict, instances=[{"prompt": prompt}])
         return response
     except GoogleAPICallError as e:
-        logger.error(f"{ERROR_CODES['gemini_api_error']}: Google API call error: {str(e)}")
-        raise HTTPException(status_code=502, detail={"error": {"code": ERROR_CODES['gemini_api_error'], "message": "Gemini API call failed."}})
+        logger.error(f"Google API call error during Gemini API call. Error: {e}")
+        raise GeminiAPIError("Gemini API call failed.")
     except Exception as e:
-        logger.error(f"{ERROR_CODES['gemini_api_error']}: Unexpected error during Gemini API call: {str(e)}")
-        raise HTTPException(status_code=500, detail={"error": {"code": ERROR_CODES['gemini_api_error'], "message": "Error communicating with Gemini API."}})
+        logger.error(f"Error during Gemini API call. Error: {e}")
+        raise GeminiAPIError("Error communicating with Gemini API.")
 
 def parse_email_content(email_content: Dict[str, Any]) -> str:
     try:
         context = {
             "subject": email_content.get("subject", ""),
             "body": email_content.get("body", ""),
-            "attachments_info": ", ".join([att['filename'] for att in email_content.get('attachments', []) if att.get('filename')])
+            "attachments_info": ", ".join(
+                att.get('filename', '') for att in email_content.get('attachments', [])
+            )
         }
         prompt = generate_prompt("email_parsing", context)
         return prompt
-    except Exception as e:
-        logger.error(f"{ERROR_CODES['parse_error']}: Failed to generate prompt from email content. Cause: {str(e)}")
-        raise HTTPException(status_code=500, detail={"error": {"code": ERROR_CODES['parse_error'], "message": "Failed to generate prompt from email content."}})
+    except PromptError as e:
+        logger.error(f"Error generating prompt from email content. Error: {e}")
+        raise ParseError("Failed to generate prompt from email content.")

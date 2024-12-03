@@ -1,0 +1,220 @@
+[
+    {
+      "name": "assigner_name",
+      "type": "STRING",
+      "mode": "NULLABLE"
+    },
+    {
+      "name": "assigner_email",
+      "type": "STRING",
+      "mode": "NULLABLE"
+    },
+    {
+      "name": "assigner_phone",
+      "type": "STRING",
+      "mode": "NULLABLE"
+    },
+    {
+      "name": "assigner_phone_extension",
+      "type": "STRING",
+      "mode": "NULLABLE"
+    },
+    {
+      "name": "claim_number",
+      "type": "STRING",
+      "mode": "NULLABLE"
+    },
+    {
+      "name": "policy_number",
+      "type": "STRING",
+      "mode": "NULLABLE"
+    },
+    {
+      "name": "date_of_loss",
+      "type": "DATE",
+      "mode": "NULLABLE"
+    },
+    {
+      "name": "client",
+      "type": "STRING",
+      "mode": "NULLABLE"
+    },
+    {
+      "name": "insurance_carrier",
+      "type": "STRING",
+      "mode": "NULLABLE"
+    },
+    {
+      "name": "insured_name",
+      "type": "STRING",
+      "mode": "NULLABLE"
+    },
+    {
+      "name": "insured_phone_numbers",
+      "type": "STRING",
+      "mode": "NULLABLE"
+    },
+    {
+      "name": "insured_email",
+      "type": "STRING",
+      "mode": "NULLABLE"
+    },
+    {
+      "name": "risk_location_address",
+      "type": "STRING",
+      "mode": "NULLABLE"
+    },
+    {
+      "name": "is_cat_event",
+      "type": "BOOLEAN",
+      "mode": "NULLABLE"
+    },
+    {
+      "name": "cat_event_name",
+      "type": "STRING",
+      "mode": "NULLABLE"
+    },
+    {
+      "name": "additional_party_name",
+      "type": "STRING",
+      "mode": "NULLABLE"
+    },
+    {
+      "name": "additional_party_company",
+      "type": "STRING",
+      "mode": "NULLABLE"
+    },
+    {
+      "name": "additional_party_phone",
+      "type": "STRING",
+      "mode": "NULLABLE"
+    },
+    {
+      "name": "additional_party_email",
+      "type": "STRING",
+      "mode": "NULLABLE"
+    },
+    {
+      "name": "services_description",
+      "type": "STRING",
+      "mode": "NULLABLE"
+    },
+    {
+      "name": "expert_type_needed",
+      "type": "STRING",
+      "mode": "NULLABLE"
+    },
+    {
+      "name": "damage_type",
+      "type": "STRING",
+      "mode": "NULLABLE"
+    },
+    {
+      "name": "property_areas_to_inspect",
+      "type": "STRING",
+      "mode": "NULLABLE"
+    },
+    {
+      "name": "budget_required_before_proceeding",
+      "type": "BOOLEAN",
+      "mode": "NULLABLE"
+    },
+    {
+      "name": "number_of_buildings_units",
+      "type": "INTEGER",
+      "mode": "NULLABLE"
+    },
+    {
+      "name": "call_required_before_inspection",
+      "type": "BOOLEAN",
+      "mode": "NULLABLE"
+    },
+    {
+      "name": "call_required_after_inspection",
+      "type": "BOOLEAN",
+      "mode": "NULLABLE"
+    },
+    {
+      "name": "repair_recommendations_needed",
+      "type": "BOOLEAN",
+      "mode": "NULLABLE"
+    },
+    {
+      "name": "cost_estimate_required",
+      "type": "BOOLEAN",
+      "mode": "NULLABLE"
+    },
+    {
+      "name": "tarp_removal_permission",
+      "type": "BOOLEAN",
+      "mode": "NULLABLE"
+    },
+    {
+      "name": "tile_matching_info",
+      "type": "STRING",
+      "mode": "NULLABLE"
+    },
+    {
+      "name": "roof_diagram_needed",
+      "type": "BOOLEAN",
+      "mode": "NULLABLE"
+    },
+    {
+      "name": "notes_comments",
+      "type": "STRING",
+      "mode": "NULLABLE"
+    },
+    {
+      "name": "attachments",
+      "type": "RECORD",
+      "mode": "REPEATED",
+      "fields": [
+        {
+          "name": "attachment_name",
+          "type": "STRING",
+          "mode": "NULLABLE"
+        },
+        {
+          "name": "attachment_url",
+          "type": "STRING",
+          "mode": "NULLABLE"
+        },
+        {
+          "name": "attachment_content",
+          "type": "STRING",
+          "mode": "NULLABLE"
+        }
+      ]
+    },
+    {
+      "name": "extracted_data_from_attachments",
+      "type": "STRING",
+      "mode": "NULLABLE"
+    },
+    {
+      "name": "submission_date",
+      "type": "TIMESTAMP",
+      "mode": "NULLABLE"
+    },
+    {
+      "name": "email_content",
+      "type": "STRING",
+      "mode": "NULLABLE"
+    },
+    {
+      "name": "email_id",
+      "type": "STRING",
+      "mode": "NULLABLE"
+    },
+    {
+      "name": "thread_id",
+      "type": "STRING",
+      "mode": "NULLABLE"
+    },
+    {
+      "name": "message_ids",
+      "type": "STRING",
+      "mode": "REPEATED"
+    }
+  ]
+  

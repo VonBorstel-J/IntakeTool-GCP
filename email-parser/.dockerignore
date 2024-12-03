@@ -6,3 +6,5 @@ app.log
 *.pyo
 .git
 .gitignore
+.DS_Store
+tests/

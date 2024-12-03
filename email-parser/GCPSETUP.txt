@@ -1,0 +1,267 @@
+PS C:\Users\jorda\OneDrive\Desktop\Quickbase Dev Work\IntakeTool> cd ./email-parser
+PS C:\Users\jorda\OneDrive\Desktop\Quickbase Dev Work\IntakeTool\email-parser> gcloud auth login
+Your browser has been opened to visit:
+
+    https://accounts.google.com/o/oauth2/auth?response_type=code&client_id=32555940559.apps.googleusercontent.com&redirect_uri=http%3A%2F%2Flocalhost%3A8085%2F&scope=openid+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fuserinfo.email+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcloud-platform+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fappengine.admin+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fsqlservice.login+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcompute+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Faccounts.reauth&state=A9jdwXO3EPdmACVXCHfg5pldqcDzcp&access_type=offline&code_challenge=gL5Muh6YBO7bjR3vkPRUf6rjxBA1FwKwFoG0xGW23sY&code_challenge_method=S256
+
+
+You are now logged in as [jvonborstel@keystoneexperts.com].
+Your current project is [forensicemailparser].  You can change this setting by running:
+  $ gcloud config set project PROJECT_ID
+
+
+To take a quick anonymous survey, run:
+  $ gcloud survey
+
+PS C:\Users\jorda\OneDrive\Desktop\Quickbase Dev Work\IntakeTool\email-parser> gcloud config get-value project
+forensicemailparser
+PS C:\Users\jorda\OneDrive\Desktop\Quickbase Dev Work\IntakeTool\email-parser> gcloud services list
+NAME                                      TITLE
+aerialview.googleapis.com                 Aerial View API
+aiplatform.googleapis.com                 Vertex AI API
+analyticshub.googleapis.com               Analytics Hub API
+artifactregistry.googleapis.com           Artifact Registry API
+autoscaling.googleapis.com                Cloud Autoscaling API
+bigquery.googleapis.com                   BigQuery API
+bigqueryconnection.googleapis.com         BigQuery Connection API
+bigquerydatapolicy.googleapis.com         BigQuery Data Policy API
+bigquerydatatransfer.googleapis.com       BigQuery Data Transfer API
+bigquerymigration.googleapis.com          BigQuery Migration API
+bigqueryreservation.googleapis.com        BigQuery Reservation API
+bigquerystorage.googleapis.com            BigQuery Storage API
+billingbudgets.googleapis.com             Cloud Billing Budget API
+cloudaicompanion.googleapis.com           Gemini for Google Cloud API
+cloudapis.googleapis.com                  Google Cloud APIs
+cloudbuild.googleapis.com                 Cloud Build API
+cloudfunctions.googleapis.com             Cloud Functions API
+cloudresourcemanager.googleapis.com       Cloud Resource Manager API
+cloudtasks.googleapis.com                 Cloud Tasks API
+cloudtrace.googleapis.com                 Cloud Trace API
+compute.googleapis.com                    Compute Engine API
+container.googleapis.com                  Kubernetes Engine API
+containeranalysis.googleapis.com          Container Analysis API
+containerfilesystem.googleapis.com        Container File System API
+containerregistry.googleapis.com          Container Registry API
+datacatalog.googleapis.com                Google Cloud Data Catalog API
+dataflow.googleapis.com                   Dataflow API
+dataform.googleapis.com                   Dataform API
+datastore.googleapis.com                  Cloud Datastore API
+deploymentmanager.googleapis.com          Cloud Deployment Manager V2 API
+directions-backend.googleapis.com         Directions API
+distance-matrix-backend.googleapis.com    Distance Matrix API
+dns.googleapis.com                        Cloud DNS API
+documentai.googleapis.com                 Cloud Document AI API
+elevation-backend.googleapis.com          Maps Elevation API
+generativelanguage.googleapis.com         Generative Language API
+geocoding-backend.googleapis.com          Geocoding API
+geolocation.googleapis.com                Geolocation API
+gkebackup.googleapis.com                  Backup for GKE API
+gmail.googleapis.com                      Gmail API
+iam.googleapis.com                        Identity and Access Management (IAM) API
+iamcredentials.googleapis.com             IAM Service Account Credentials API
+logging.googleapis.com                    Cloud Logging API
+maps-embed-backend.googleapis.com         Maps Embed API
+mapsplatformdatasets.googleapis.com       Maps Platform Datasets API
+monitoring.googleapis.com                 Cloud Monitoring API
+networkconnectivity.googleapis.com        Network Connectivity API
+notebooks.googleapis.com                  Notebooks API
+oslogin.googleapis.com                    Cloud OS Login API
+places-backend.googleapis.com             Places API
+pubsub.googleapis.com                     Cloud Pub/Sub API
+recommender.googleapis.com                Recommender API
+roads.googleapis.com                      Roads API
+run.googleapis.com                        Cloud Run Admin API
+secretmanager.googleapis.com              Secret Manager API
+servicemanagement.googleapis.com          Service Management API
+serviceusage.googleapis.com               Service Usage API
+source.googleapis.com                     Legacy Cloud Source Repositories API
+sql-component.googleapis.com              Cloud SQL
+sqladmin.googleapis.com                   Cloud SQL Admin API
+static-maps-backend.googleapis.com        Maps Static API
+storage-api.googleapis.com                Google Cloud Storage JSON API
+storage-component.googleapis.com          Cloud Storage
+storage.googleapis.com                    Cloud Storage API
+street-view-image-backend.googleapis.com  Street View Static API
+streetviewpublish.googleapis.com          Street View Publish API
+tile.googleapis.com                       Map Tiles API
+timezone-backend.googleapis.com           Time Zone API
+visionai.googleapis.com                   Vision AI API
+PS C:\Users\jorda\OneDrive\Desktop\Quickbase Dev Work\IntakeTool\email-parser> gcloud container images list
+NAME
+gcr.io/forensicemailparser/email-parser
+Only listing images in gcr.io/forensicemailparser. Use --repository to list images in other repositories.
+PS C:\Users\jorda\OneDrive\Desktop\Quickbase Dev Work\IntakeTool\email-parser> gcloud artifacts repositories list
+Listing items under project forensicemailparser, across all locations.
+
+                                                               ARTIFACT_REGISTRY
+REPOSITORY  FORMAT  MODE                 DESCRIPTION  LOCATION  LABELS  ENCRYPTION          CREATE_TIME          UPDATE_TIME          SIZE (MB)
+gcr.io      DOCKER  STANDARD_REPOSITORY               us                Google-managed key  2024-11-21T11:48:45  2024-11-26T13:10:00  118.353
+PS C:\Users\jorda\OneDrive\Desktop\Quickbase Dev Work\IntakeTool\email-parser> gcloud beta builds triggers list  
+---
+autodetect: true
+createTime: '2024-11-26T22:34:02.345988035Z'
+description: 'Updates GCP Intake Tool deployment when Main Branch is updated. '
+github:
+  name: IntakeTool-GCP
+  owner: VonBorstel-J
+  push:
+    branch: ^main$
+id: 45992459-5c84-4d2e-bf15-2b6016be41b6
+name: Intake-Tool-CI
+resourceName: projects/forensicemailparser/locations/global/triggers/45992459-5c84-4d2e-bf15-2b6016be41b6
+serviceAccount: projects/forensicemailparser/serviceAccounts/intake-tool-sa@forensicemailparser.iam.gserviceaccount.com
+PS C:\Users\jorda\OneDrive\Desktop\Quickbase Dev Work\IntakeTool\email-parser> gcloud run revisions list --service email-parser --region us-central1
+   REVISION                ACTIVE  SERVICE       DEPLOYED                 DEPLOYED BY
++  email-parser-00006-kh7  yes     email-parser  2024-12-02 18:18:37 UTC  jvonborstel@keystoneexperts.com
++  email-parser-00005-l6l          email-parser  2024-12-02 18:17:05 UTC  jvonborstel@keystoneexperts.com
+X  email-parser-00004-gv5          email-parser  2024-12-02 18:13:27 UTC  jvonborstel@keystoneexperts.com
++  email-parser-00003-b7b          email-parser  2024-11-26 20:26:58 UTC  jvonborstel@keystoneexperts.com
++  email-parser-00002-k2w          email-parser  2024-11-26 20:25:41 UTC  jvonborstel@keystoneexperts.com
++  email-parser-00001-6gh          email-parser  2024-11-26 18:39:53 UTC  jvonborstel@keystoneexperts.com
+PS C:\Users\jorda\OneDrive\Desktop\Quickbase Dev Work\IntakeTool\email-parser> gcloud run services describe email-parser --region us-central1 --format="json(spec.template.spec.containers[0].env)"
+{
+  "spec": {
+    "template": {
+      "spec": {
+        "containers": [
+          {
+            "env": [
+              {
+                "name": "GEMINI_API_KEY",
+                "valueFrom": {
+                  "secretKeyRef": {
+                    "key": "latest",
+                    "name": "gemini-api-key"
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}
+PS C:\Users\jorda\OneDrive\Desktop\Quickbase Dev Work\IntakeTool\email-parser> gcloud logging read "resource.type=cloud_run_revision AND resource.labels.service_name=email-parser" --limit 10
+---
+httpRequest:
+  latency: 0s
+  protocol: HTTP/1.1
+  referer: https://email-parser-877538489171.us-central1.run.app/
+  remoteIp: 50.185.3.254
+  requestMethod: GET
+  requestSize: '754'
+  requestUrl: https://email-parser-877538489171.us-central1.run.app/favicon.ico
+  serverIp: 216.239.38.53
+  status: 403
+  userAgent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
+    like Gecko) Chrome/131.0.0.0 Safari/537.36
+insertId: 674f2d39000cebb28cb12936
+logName: projects/forensicemailparser/logs/run.googleapis.com%2Frequests
+receiveTimestamp: '2024-12-03T16:09:29.856049135Z'
+resource:
+  labels:
+    configuration_name: email-parser
+    location: us-central1
+    project_id: forensicemailparser
+    revision_name: email-parser-00006-kh7
+    service_name: email-parser
+  type: cloud_run_revision
+severity: WARNING
+spanId: be4ff4d2afac5897
+textPayload: 'The request was not authenticated. Either allow unauthenticated invocations
+  or set the proper Authorization header. Read more at https://cloud.google.com/run/docs/securing/authenticating
+  Additional troubleshooting documentation can be found at: https://cloud.google.com/run/docs/troubleshooting#unauthorized-client'
+timestamp: '2024-12-03T16:09:29.698711Z'
+trace: projects/forensicemailparser/traces/d94bc9b22dedd375ebd1e9a600183093
+traceSampled: true
+PS C:\Users\jorda\OneDrive\Desktop\Quickbase Dev Work\IntakeTool\email-parser> gcloud builds list --filter "images:gcr.io/forensicemailparser/email-parser"                      
+Listed 0 items.
+PS C:\Users\jorda\OneDrive\Desktop\Quickbase Dev Work\IntakeTool\email-parser> gcloud secrets describe gemini-api-key
+createTime: '2024-11-22T00:21:52.314220Z'
+etag: '"1627755e9db36c"'
+name: projects/877538489171/secrets/gemini-api-key
+replication:
+  automatic: {}
+PS C:\Users\jorda\OneDrive\Desktop\Quickbase Dev Work\IntakeTool\email-parser> gcloud projects get-iam-policy forensicemailparser --flatten="bindings[].members" --format='table(bindings.role)'
+ROLE
+roles/aiplatform.onlinePredictionServiceAgent
+roles/aiplatform.serviceAgent
+roles/aiplatform.user
+roles/artifactregistry.serviceAgent
+roles/bigquery.admin
+roles/bigquery.admin
+roles/bigquery.dataEditor
+roles/bigquerydatatransfer.serviceAgent
+roles/cloudbuild.builds.builder
+roles/cloudbuild.serviceAgent
+roles/cloudfunctions.serviceAgent
+roles/cloudtasks.serviceAgent
+roles/compute.serviceAgent
+roles/container.serviceAgent
+roles/containeranalysis.ServiceAgent
+roles/containerregistry.ServiceAgent
+roles/containerscanning.ServiceAgent
+roles/dataflow.serviceAgent
+roles/documentai.apiUser
+roles/documentaicore.serviceAgent
+roles/editor
+roles/editor
+roles/editor
+roles/editor
+roles/editor
+roles/notebooks.serviceAgent
+roles/owner
+roles/pubsub.serviceAgent
+roles/run.admin
+roles/run.invoker
+roles/run.serviceAgent
+roles/secretmanager.secretAccessor
+roles/secretmanager.secretAccessor
+roles/storage.admin
+roles/storage.admin
+roles/storage.objectAdmin
+PS C:\Users\jorda\OneDrive\Desktop\Quickbase Dev Work\IntakeTool\email-parser> gcloud run services describe email-parser --region us-central1 --format="json(spec.template.spec.containers[0].ports)"
+{
+  "spec": {
+    "template": {
+      "spec": {
+        "containers": [
+          {
+            "ports": [
+              {
+                "containerPort": 8080,
+                "name": "http1"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}
+PS C:\Users\jorda\OneDrive\Desktop\Quickbase Dev Work\IntakeTool\email-parser> gcloud run services describe email-parser --region us-central1 --format="json(spec.template.spec.containers[0].env)"  
+{
+  "spec": {
+    "template": {
+      "spec": {
+        "containers": [
+          {
+            "env": [
+              {
+                "name": "GEMINI_API_KEY",
+                "valueFrom": {
+                  "secretKeyRef": {
+                    "key": "latest",
+                    "name": "gemini-api-key"
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}
+PS C:\Users\jorda\OneDrive\Desktop\Quickbase Dev Work\IntakeTool\email-parser> 

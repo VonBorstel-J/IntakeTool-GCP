@@ -1,10 +1,13 @@
 steps:
+# Build the Docker image
 - name: "gcr.io/cloud-builders/docker"
   args: ["build", "-t", "gcr.io/$PROJECT_ID/email-parser:$SHORT_SHA", "."]
 
+# Push the Docker image to Container Registry
 - name: "gcr.io/cloud-builders/docker"
   args: ["push", "gcr.io/$PROJECT_ID/email-parser:$SHORT_SHA"]
 
+# Deploy to Cloud Run
 - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
   entrypoint: "bash"
   args:
@@ -36,6 +39,10 @@ steps:
     - |
       gcloud logging write test-log "Cloud Run service successfully deployed" \
         --severity=INFO
+
+# Specify the logs bucket
+options:
+  logging: CLOUD_LOGGING_ONLY
 
 images:
 - "gcr.io/$PROJECT_ID/email-parser:$SHORT_SHA"

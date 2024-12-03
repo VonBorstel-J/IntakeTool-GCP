@@ -7,29 +7,31 @@ steps:
 - name: "gcr.io/cloud-builders/docker"
   args: ["push", "gcr.io/$PROJECT_ID/email-parser:$SHORT_SHA"]
 
-# Deploy to Cloud Run, retrieving GEMINI_API_KEY from Secret Manager
+# Deploy to Cloud Run with GEMINI_API_KEY from Secret Manager
 - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
   entrypoint: "bash"
   args:
     - "-c"
     - |
-      GEMINI_API_KEY=$(gcloud secrets versions access latest --secret=gemini-api-key) && \
+      echo "Deploying to Cloud Run..."
+      GEMINI_API_KEY=$(gcloud secrets versions access latest --secret=gemini-api-key) || { echo "Failed to retrieve GEMINI_API_KEY"; exit 1; }
       gcloud run deploy email-parser \
         --image gcr.io/$PROJECT_ID/email-parser:$SHORT_SHA \
         --region us-central1 \
         --platform managed \
         --no-allow-unauthenticated \
-        --set-env-vars=GEMINI_API_KEY=$GEMINI_API_KEY
+        --set-env-vars=GEMINI_API_KEY="$GEMINI_API_KEY"
 
-# Grant access to specific users or service accounts
+# Grant access to a specific user or service account
 - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
   entrypoint: "bash"
   args:
     - "-c"
     - |
+      echo "Granting access to user jvonborstel@keystoneexperts.com..."
       gcloud run services add-iam-policy-binding email-parser \
         --region us-central1 \
-        --member="user:jvonborstel@keystoneexperts.com" \
+        --member="serviceAccount:intake-tool-sa@forensicemailparser.iam.gserviceaccount.com" \
         --role="roles/run.invoker"
 
 # Log a success message
@@ -38,12 +40,18 @@ steps:
   args:
     - "-c"
     - |
+      echo "Writing success log..."
       gcloud logging write test-log "Cloud Run service successfully deployed" \
         --severity=INFO
 
-# Use Cloud Logging for build logs
+# Specify Cloud Logging for build logs
 options:
   logging: CLOUD_LOGGING_ONLY
 
+# Images to push
 images:
 - "gcr.io/$PROJECT_ID/email-parser:$SHORT_SHA"
+
+# Secrets configuration
+secrets:
+- secret: gemini-api-key

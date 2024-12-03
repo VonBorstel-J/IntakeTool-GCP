@@ -7,7 +7,7 @@ steps:
 - name: "gcr.io/cloud-builders/docker"
   args: ["push", "gcr.io/$PROJECT_ID/email-parser:$SHORT_SHA"]
 
-# Retrieve GEMINI_API_KEY from Secret Manager and deploy to Cloud Run
+# Deploy to Cloud Run, retrieving GEMINI_API_KEY from Secret Manager
 - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
   entrypoint: "bash"
   args:
@@ -19,7 +19,7 @@ steps:
         --region us-central1 \
         --platform managed \
         --no-allow-unauthenticated \
-        --set-env-vars=GCP_PROJECT_ID=$PROJECT_ID,GEMINI_API_KEY=$GEMINI_API_KEY
+        --set-env-vars=GEMINI_API_KEY=$GEMINI_API_KEY
 
 # Grant access to specific users or service accounts
 - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
@@ -32,7 +32,7 @@ steps:
         --member="user:jvonborstel@keystoneexperts.com" \
         --role="roles/run.invoker"
 
-# Set up monitoring/logging
+# Log a success message
 - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
   entrypoint: "bash"
   args:
@@ -41,7 +41,7 @@ steps:
       gcloud logging write test-log "Cloud Run service successfully deployed" \
         --severity=INFO
 
-# Specify the logs bucket
+# Use Cloud Logging for build logs
 options:
   logging: CLOUD_LOGGING_ONLY
 

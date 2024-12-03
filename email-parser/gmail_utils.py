@@ -1,360 +1,383 @@
 # gmail_utils.py
-import base64, os, logging, asyncio
+
+import asyncio
+import base64
+import os
 from datetime import datetime
-from typing import List, Dict, Any, Optional
 from functools import lru_cache
-from ratelimit import limits, sleep_and_retry
+from typing import Any, Dict, List, Optional, TypedDict
+
 from google.auth import default
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential, before_log, after_log
-from fastapi import HTTPException
-from google.cloud import documentai_v1 as documentai, storage
-
-logger = logging.getLogger("gmail_utils")
-logger.setLevel(logging.INFO)
-if not logger.handlers:
-    handler = logging.StreamHandler()
-    handler.setFormatter(logging.Formatter('{"time": "%(asctime)s", "level": "%(levelname)s", "message": "%(message)s"}'))
-    logger.addHandler(handler)
-
-ERROR_CODES = {"fetch_error": "ERR001", "parse_error": "ERR002", "invalid_input": "ERR003", "server_error": "ERR004"}
-SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
-ONE_MINUTE, MAX_REQUESTS_PER_MINUTE = 60, 100
-
-def get_logger(extra: Dict[str, Any] = {}) -> logging.Logger:
-    return logging.LoggerAdapter(logger, extra)
-
-@sleep_and_retry
-@limits(calls=MAX_REQUESTS_PER_MINUTE, period=ONE_MINUTE)
-def rate_limited_api_call(service_method, *args, **kwargs):
-    logger_adapter = get_logger()
-    try:
-        return service_method(*args, **kwargs).execute()
-    except Exception as e:
-        logger_adapter.error(f"Rate limited API call failed: {e}")
-        raise
-
-@retry(
-    retry=retry_if_exception_type((HttpError, Exception)),
-    stop=stop_after_attempt(5),
-    wait=wait_exponential(multiplier=1, min=4, max=10),
-    before=before_log(logger, logging.INFO),
-    after=after_log(logger, logging.INFO),
+from google.cloud import documentai_v1 as documentai
+from google.cloud import storage
+from google.cloud import vision
+from tenacity import (
+    retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 )
-def resilient_api_call(service_method, *args, **kwargs):
-    return rate_limited_api_call(service_method, *args, **kwargs)
 
-def validate_service_account(credentials):
-    if "https://www.googleapis.com/auth/gmail.readonly" not in credentials.scopes:
-        raise ValueError("Service account is missing the required Gmail scope.")
-    get_logger().info("Service account validated successfully.")
+from config import get_logger, validate_environment_variables
+from exceptions import FetchError, ParseError, ServerError, GCPError
 
+# Configuration
+SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
+MAX_CONCURRENT_TASKS = int(os.getenv("MAX_CONCURRENT_TASKS", 10))
+
+ERROR_CODES = {
+    "fetch_error": "ERR001",
+    "parse_error": "ERR002",
+    "invalid_input": "ERR003",
+    "server_error": "ERR004",
+    "gcp_error": "ERR005"
+}
+
+GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID")
+GCP_LOCATION = os.getenv("GCP_LOCATION", "us-central1")
+DOCUMENT_AI_PROCESSOR_ID = os.getenv("DOCUMENT_AI_PROCESSOR_ID")
+GCS_BUCKET_NAME = os.getenv("GCS_BUCKET_NAME")
+GOOGLE_SERVICE_ACCOUNT_PATH = os.getenv("GOOGLE_SERVICE_ACCOUNT_PATH")
+
+logger = get_logger()
+
+# TypedDicts for better type annotations
+class Attachment(TypedDict):
+    filename: str
+    mimeType: str
+    data: bytes
+    gcs_uri: Optional[str]
+
+class EmailContent(TypedDict):
+    email_content: str
+    attachments_content: List[Dict[str, Any]]
+    error: Optional[str]
+
+# Retry Configuration
+def retry_on_gcp_http():
+    return retry_if_exception_type((GCPError, HttpError))
+
+# Gmail Service Initialization
 def get_gmail_service() -> Any:
-    logger_adapter = get_logger()
     try:
-        service_account_path = os.getenv("GOOGLE_SERVICE_ACCOUNT_PATH")
-        if service_account_path and os.path.exists(service_account_path):
-            credentials = service_account.Credentials.from_service_account_file(service_account_path, scopes=SCOPES)
-            validate_service_account(credentials)
-            logger_adapter.info("Using service account credentials.")
+        validate_environment_variables()
+        if GOOGLE_SERVICE_ACCOUNT_PATH and os.path.exists(GOOGLE_SERVICE_ACCOUNT_PATH):
+            credentials = service_account.Credentials.from_service_account_file(
+                GOOGLE_SERVICE_ACCOUNT_PATH, scopes=SCOPES
+            )
+            logger.info("Using service account credentials.", extra={"credentials_type": "service_account"})
         else:
             credentials, _ = default(scopes=SCOPES)
-            logger_adapter.info("Using default credentials.")
+            logger.info("Using default credentials.", extra={"credentials_type": "default"})
         return build('gmail', 'v1', credentials=credentials)
     except Exception as e:
-        logger_adapter.error(f"{ERROR_CODES['fetch_error']}: Failed to create Gmail service. Cause: {e}")
-        raise HTTPException(status_code=500, detail={"error": {"code": ERROR_CODES['fetch_error'], "message": "Failed to initialize Gmail service."}})
+        logger.error(f"{ERROR_CODES['fetch_error']}: Failed to initialize Gmail service.", exc_info=True, extra={"error": str(e)})
+        raise FetchError(f"Failed to initialize Gmail service. {e}")
 
-def decode_body(data: str) -> str:
-    logger_adapter = get_logger()
+# Resilient API Call with Custom Retry
+@retry(
+    retry=retry_on_gcp_http(),
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=1, max=10),
+    reraise=True
+)
+async def resilient_api_call(func, *args, **kwargs):
+    loop = asyncio.get_event_loop()
     try:
-        return base64.urlsafe_b64decode(data).decode('utf-8')
+        return await loop.run_in_executor(None, lambda: func(*args, **kwargs).execute())
+    except (GCPError, HttpError) as e:
+        raise e
     except Exception as e:
-        logger_adapter.error(f"{ERROR_CODES['parse_error']}: Failed to decode email body. Cause: {e}")
-        return ""
+        logger.error("Unexpected error during API call.", exc_info=True, extra={"error": str(e)})
+        raise GCPError(str(e))
 
-def get_attachment_metadata(part: Dict[str, Any]) -> Dict[str, Any]:
-    logger_adapter = get_logger()
+# Decode Attachment
+async def decode_attachment(service, message_id, attachment_id) -> bytes:
+    attachment = await resilient_api_call(
+        service.users().messages().attachments().get,
+        userId='me',
+        messageId=message_id,
+        id=attachment_id
+    )
+    return base64.urlsafe_b64decode(attachment['data'].encode('UTF-8'))
+
+# GCS Client
+def get_gcs_client() -> storage.Client:
+    return storage.Client()
+
+# Vision Client
+def get_vision_client() -> vision.ImageAnnotatorClient:
+    return vision.ImageAnnotatorClient()
+
+# Upload to GCS with Retry
+@retry(
+    retry=retry_if_exception_type(GCPError),
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=1, max=10),
+    reraise=True
+)
+async def upload_to_gcs(file_name: str, file_content: bytes) -> str:
     try:
-        metadata = {
-            "filename": part.get('filename') or "UNKNOWN_FILENAME",
-            "mimeType": part.get('mimeType') or "application/octet-stream",
-            "size": int(part.get('body', {}).get('size', 0)),
-            "attachmentId": part.get('body', {}).get('attachmentId'),
-            "hash": part.get('body', {}).get('hash')
-        }
-        logger_adapter.info(f"Extracted metadata for attachment: {metadata['filename']}")
-        return metadata
+        client = get_gcs_client()
+        bucket = client.bucket(GCS_BUCKET_NAME)
+        blob = bucket.blob(file_name)
+        await asyncio.get_event_loop().run_in_executor(None, blob.upload_from_string, file_content)
+        gcs_uri = f"gs://{GCS_BUCKET_NAME}/{file_name}"
+        logger.info(f"Uploaded {file_name} to GCS.", extra={"gcs_uri": gcs_uri})
+        return gcs_uri
     except Exception as e:
-        logger_adapter.error(f"{ERROR_CODES['parse_error']}: Failed to extract attachment metadata: {e}")
-        return {"filename": "UNKNOWN_FILENAME", "mimeType": None, "size": None}
+        logger.error(f"{ERROR_CODES['gcp_error']}: Failed to upload {file_name} to GCS.", exc_info=True, extra={"error": str(e)})
+        raise GCPError(f"Failed to upload {file_name} to GCS. {e}")
 
-def process_attachment_with_documentai(processor_id, bucket_name, file_name, mime_type):
+# MIME Type Validation
+SUPPORTED_MIME_TYPES = ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'image/jpeg', 'image/png']
+
+def validate_mime_type(mime_type: str):
+    if mime_type not in SUPPORTED_MIME_TYPES and not mime_type.startswith('image/'):
+        raise GCPError(f"Unsupported MIME type: {mime_type}")
+
+# Process PDF with Document AI
+@retry(
+    retry=retry_if_exception_type(GCPError),
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=1, max=10),
+    reraise=True
+)
+async def process_pdf(gcs_uri: str, mime_type: str) -> str:
+    validate_mime_type(mime_type)
     try:
         client = documentai.DocumentProcessorServiceClient()
-        gcs_input_uri = f"gs://{bucket_name}/{file_name}"
-        input_config = documentai.types.RawDocument(content=gcs_input_uri, mime_type=mime_type)
-        request = {
-            "name": f"projects/{os.getenv('GCP_PROJECT_ID')}/locations/{os.getenv('GCP_LOCATION')}/processors/{processor_id}",
-            "raw_document": input_config,
-        }
-        response = client.process_document(request=request)
-        return response.document.text
+        name = f"projects/{GCP_PROJECT_ID}/locations/{GCP_LOCATION}/processors/{DOCUMENT_AI_PROCESSOR_ID}"
+        document = documentai.RawDocument(
+            content=await download_from_gcs(gcs_uri),
+            mime_type=mime_type
+        )
+        request = documentai.ProcessRequest(name=name, raw_document=document)
+        response = await asyncio.get_event_loop().run_in_executor(None, client.process_document, request)
+        extracted_text = response.document.text
+        logger.info("Processed PDF with Document AI.", extra={"gcs_uri": gcs_uri, "extracted_text_length": len(extracted_text)})
+        return extracted_text
     except Exception as e:
-        logger.error(f"Document AI processing failed for file '{file_name}': {e}")
-        return f"Failed to process '{file_name}' due to {e}"
+        logger.error(f"{ERROR_CODES['gcp_error']}: Document AI processing failed for {gcs_uri}.", exc_info=True, extra={"error": str(e)})
+        raise GCPError(f"Document AI processing failed for {gcs_uri}. {e}")
 
-def validate_and_process_attachments(attachments, bucket_name, processor_id):
-    processed_texts = []
-    for attachment in attachments:
-        try:
-            validate_attachment(attachment["filename"], attachment["size"])
-            gcs_path = upload_attachment_to_gcs(bucket_name, attachment["filename"], attachment["content"])
-            attachment_text = process_attachment_with_documentai(
-                processor_id, bucket_name, attachment["filename"], attachment.get("mimeType", "application/pdf")
-            )
-            processed_texts.append(attachment_text)
-        except Exception as e:
-            logger.error(f"Error handling attachment '{attachment['filename']}': {e}")
-            processed_texts.append(f"Error processing '{attachment['filename']}': {e}")
-    return " ".join(processed_texts)
+# Process Image with Vision AI
+@retry(
+    retry=retry_if_exception_type(GCPError),
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=1, max=10),
+    reraise=True
+)
+async def process_image(gcs_uri: str) -> str:
+    try:
+        client = get_vision_client()
+        image = vision.Image(source=vision.ImageSource(gcs_image_uri=gcs_uri))
+        response = await asyncio.get_event_loop().run_in_executor(None, client.text_detection, image)
+        texts = response.text_annotations
+        extracted_text = texts[0].description if texts else ""
+        logger.info("Processed image with Vision AI.", extra={"gcs_uri": gcs_uri, "extracted_text_length": len(extracted_text)})
+        return extracted_text
+    except Exception as e:
+        logger.error(f"{ERROR_CODES['gcp_error']}: Vision AI processing failed for {gcs_uri}.", exc_info=True, extra={"error": str(e)})
+        raise GCPError(f"Vision AI processing failed for {gcs_uri}. {e}")
 
-def upload_attachment_to_gcs(bucket_name, file_name, file_content):
-    client = storage.Client()
-    blob = client.bucket(bucket_name).blob(file_name)
-    blob.upload_from_string(file_content)
-    gcs_uri = f"gs://{bucket_name}/{file_name}"
+# Download from GCS
+async def download_from_gcs(gcs_uri: str) -> bytes:
+    try:
+        client = get_gcs_client()
+        bucket_name, blob_name = gcs_uri.replace("gs://", "").split("/", 1)
+        blob = client.bucket(bucket_name).blob(blob_name)
+        data = await asyncio.get_event_loop().run_in_executor(None, blob.download_as_bytes)
+        return data
+    except Exception as e:
+        logger.error(f"Failed to download from GCS {gcs_uri}.", exc_info=True, extra={"error": str(e)})
+        raise GCPError(f"Failed to download from GCS {gcs_uri}. {e}")
+
+# Process Attachment
+async def process_attachment(attachment: Attachment) -> Optional[Dict[str, Any]]:
+    filename, mime_type, gcs_uri = attachment['filename'], attachment['mimeType'], attachment.get('gcs_uri')
     if not gcs_uri:
-        raise ValueError(f"Failed to generate GCS URI for {file_name}")
-    return gcs_uri
+        logger.info("No GCS URI found for attachment.", extra={"filename": filename})
+        return None
+    try:
+        if mime_type in ['application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document']:
+            extracted_text = await process_pdf(gcs_uri, mime_type)
+        elif mime_type.startswith('image/'):
+            extracted_text = await process_image(gcs_uri)
+        else:
+            logger.info("Skipping unsupported attachment type.", extra={"mime_type": mime_type, "filename": filename})
+            return None
+        return {"name": filename, "extracted_text": extracted_text}
+    except Exception as e:
+        logger.error(f"{ERROR_CODES['gcp_error']}: Failed to process attachment {filename}.", exc_info=True, extra={"error": str(e)})
+        return None
 
-def handle_attachments_and_parse(email, attachments, bucket_name, processor_id):
-    attachments_content = []
-    for attachment in attachments:
-        gcs_path = upload_attachment_to_gcs(bucket_name, attachment["filename"], attachment["content"])
-        attachment_text = process_attachment_with_documentai(processor_id, bucket_name, attachment["filename"])
-        attachments_content.append(attachment_text)
-    combined_attachments_content = " ".join(attachments_content)
-    context = {
-        "email_thread_content": email.get("body", ""),
-        "attachments_content": combined_attachments_content,
+# Extract Email Metadata
+def extract_email_metadata(headers: List[Dict[str, str]], keys: Optional[List[str]] = None) -> Dict[str, str]:
+    mapping = {
+        'From': 'sender',
+        'To': 'recipients',
+        'Cc': 'cc',
+        'Bcc': 'bcc',
+        'Date': 'date',
+        'Message-ID': 'message_id',
+        'In-Reply-To': 'in_reply_to',
+        'References': 'references',
+        'Subject': 'subject',
     }
-    return context
+    if keys:
+        mapping = {k: v for k, v in mapping.items() if k in keys}
+    return {mapping.get(h['name'], h['name']): h.get('value', '') for h in headers if h.get('name') in mapping}
 
-def validate_attachment(file_name, file_size):
-    allowed_types = {"jpeg", "jpg", "png", "bmp", "pdf", "tiff", "tif", "gif"}
-    max_size_mb = 20
-    if file_size > max_size_mb * 1024 * 1024:
-        raise ValueError(f"File size exceeds {max_size_mb}MB limit.")
-    if not any(file_name.lower().endswith(ext) for ext in allowed_types):
-        raise ValueError(f"Unsupported file type: {file_name}")
-
-
-def extract_email_metadata(headers: List[Dict[str, str]]) -> Dict[str, str]:
-    mapping = {'From': 'sender', 'To': 'recipients', 'Cc': 'cc', 'Bcc': 'bcc', 'Date': 'date', 'Message-ID': 'message_id', 'In-Reply-To': 'in_reply_to', 'References': 'references'}
-    return {mapping[h['name']]: h.get('value', '') for h in headers if h.get('name') in mapping}
-
-def extract_message_details(service: Any, message: Dict[str, Any]) -> Dict[str, Any]:
-    logger_adapter = get_logger({'message_id': message.get('id')})
+# Extract Message Details
+async def extract_message_details(service: Any, message: Dict[str, Any]) -> Dict[str, Any]:
     try:
         payload = message.get('payload', {})
-        if not payload:
-            logger_adapter.warning(f"{ERROR_CODES['parse_error']}: Message {message.get('id')} has no payload.")
-            return {}
-        headers = payload.get('headers', [])
-        metadata = extract_email_metadata(headers)
-        subject = next((h['value'] for h in headers if h.get('name') == 'Subject' and h.get('value').strip()), '')
-        body = decode_body(payload.get('body', {}).get('data', ''))
-        attachments = [decode_attachment(service, message['id'], part.get('body', {}).get('attachmentId'))
-                       for part in payload.get('parts', []) if part.get('filename') and part.get('body', {}).get('attachmentId')]
-        from_header = next((h['value'] for h in headers if h.get('name') == 'From' and h.get('value').strip()), '')
-        timestamp = message.get('internalDate')
-        timestamp = datetime.utcfromtimestamp(int(timestamp)/1000).isoformat() + 'Z' if timestamp else ""
+        metadata = extract_email_metadata(payload.get('headers', []))
+        body_data = payload.get('body', {}).get('data', '')
+        body = base64.urlsafe_b64decode(body_data.encode('UTF-8')).decode('utf-8') if body_data else ""
+        attachments = []
+        for part in payload.get('parts', []):
+            if part.get('filename') and part.get('body', {}).get('attachmentId'):
+                data = await decode_attachment(service, message['id'], part['body']['attachmentId'])
+                attachments.append({
+                    'filename': part['filename'],
+                    'mimeType': part['mimeType'],
+                    'data': data,
+                })
         return {
             'message_id': message.get('id'),
             'metadata': metadata,
-            'labels': message.get('labelIds', []),
-            'from': from_header,
-            'timestamp': timestamp,
-            'subject': subject,
             'body': body,
-            'attachments': [att for att in attachments if att.get('data')]
+            'attachments': attachments,
         }
     except Exception as e:
-        logger_adapter.error(f"{ERROR_CODES['server_error']}: Error extracting details from message {message.get('id')}. Cause: {e}")
-        return {}
+        logger.error("Error extracting message details.", exc_info=True, extra={"error": str(e)})
+        raise ParseError(f"Error extracting message details. {e}")
 
-def combine_thread_messages(thread_id: str, processed_messages: List[Dict[str, Any]]) -> Dict[str, Any]:
-    logger_adapter = get_logger({'thread_id': thread_id})
+# Combine Thread Messages with Deduplication
+def combine_thread_messages(thread_id: str, messages: List[Dict[str, Any]]) -> Dict[str, Any]:
     try:
-        body = "\n\n".join(msg.get('body', '') for msg in processed_messages).strip()
-        attachments = [att for msg in processed_messages for att in msg.get('attachments', [])]
-        subject = next((msg['subject'] for msg in processed_messages if msg.get('subject')), "")
-        logger_adapter.info(f"Thread {thread_id} contains {len(processed_messages)} messages")
-        return {"thread_id": thread_id, "subject": subject, "body": body, "attachments": attachments, "messages": processed_messages}
+        body = "\n\n".join(msg.get('body', '') for msg in messages).strip()
+        seen = set()
+        deduped_attachments = []
+        for msg in messages:
+            for att in msg.get('attachments', []):
+                key = att['filename']  # Alternatively, use hash(att['data'])
+                if key not in seen:
+                    seen.add(key)
+                    deduped_attachments.append(att)
+        subject = next((msg['metadata'].get('subject') for msg in messages if msg['metadata'].get('subject')), "")
+        logger.info("Combined thread messages.", extra={"thread_id": thread_id, "message_count": len(messages)})
+        return {
+            "thread_id": thread_id,
+            "subject": subject,
+            "body": body,
+            "attachments": deduped_attachments,
+            "messages": messages,
+        }
     except Exception as e:
-        logger_adapter.error(f"{ERROR_CODES['server_error']}: Error combining thread messages for thread {thread_id}. Cause: {e}")
-        raise HTTPException(status_code=500, detail={"error": {"code": ERROR_CODES['server_error'], "message": "Failed to combine thread messages."}})
+        logger.error("Error combining thread messages.", exc_info=True, extra={"thread_id": thread_id, "error": str(e)})
+        raise ServerError(f"Failed to combine thread messages. {e}")
 
+# Fetch Thread
+async def fetch_thread(thread_id: str) -> Dict[str, Any]:
+    try:
+        service = get_gmail_service()
+        thread = await resilient_api_call(
+            service.users().threads().get,
+            userId='me',
+            id=thread_id,
+            format='full'
+        )
+        messages = thread.get('messages', [])
+        if not messages:
+            error_msg = f"{ERROR_CODES['fetch_error']}: No messages found in thread ID: {thread_id}"
+            logger.error(error_msg, extra={"thread_id": thread_id})
+            raise FetchError(error_msg)
+        sorted_messages = sorted(messages, key=lambda msg: int(msg.get('internalDate', '0')))
+        tasks = [extract_message_details(service, msg) for msg in sorted_messages]
+        messages_details = await asyncio.gather(*tasks)
+        return combine_thread_messages(thread_id, messages_details)
+    except Exception as e:
+        logger.error("Error fetching thread.", exc_info=True, extra={"thread_id": thread_id, "error": str(e)})
+        raise ServerError(f"Error fetching thread {thread_id}. {e}")
+
+# Fetch Email with Caching
 @lru_cache(maxsize=1000)
-def fetch_cached_email(email_id: str) -> Dict[str, Any]:
-    return asyncio.run(fetch_email(email_id))
+async def fetch_email(email_id: str) -> Dict[str, Any]:
+    try:
+        service = get_gmail_service()
+        message = await resilient_api_call(
+            service.users().messages().get,
+            userId='me',
+            id=email_id,
+            format='full'
+        )
+        thread_id = message.get('threadId')
+        if not thread_id:
+            error_msg = f"{ERROR_CODES['fetch_error']}: Thread ID not found for email ID: {email_id}"
+            logger.error(error_msg, extra={"email_id": email_id})
+            raise FetchError(error_msg)
+        return await fetch_thread(thread_id)
+    except Exception as e:
+        logger.error("Failed to fetch email.", exc_info=True, extra={"email_id": email_id, "error": str(e)})
+        raise FetchError(f"Failed to fetch email {email_id}. {e}")
 
+# Process Email
+async def process_email(email_id: str) -> Dict[str, Any]:
+    email = await fetch_email(email_id)
+    attachments = email.get('attachments', [])
+    semaphore = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
+
+    async def handle_attachment(att: Attachment):
+        async with semaphore:
+            file_name, file_content = att['filename'], att['data']
+            gcs_uri = await upload_to_gcs(file_name, file_content)
+            att['gcs_uri'] = gcs_uri
+            return await process_attachment(att)
+
+    tasks = [handle_attachment(att) for att in attachments]
+    attachments_content = await asyncio.gather(*tasks)
+    attachments_content = [att for att in attachments_content if att]
+    return {
+        "email_content": email.get("body", ""),
+        "attachments_content": attachments_content
+    }
+
+# Fetch Email Batch with Partial Results
+async def fetch_email_batch(email_ids: List[str]) -> List[Dict[str, Any]]:
+    semaphore = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
+    results: List[Dict[str, Any]] = []
+
+    async def handle_email(eid: str):
+        async with semaphore:
+            try:
+                email_content = await process_email(eid)
+                results.append(email_content)
+            except Exception as e:
+                logger.error("Error processing email.", exc_info=True, extra={"email_id": eid, "error": str(e)})
+                results.append({"error": f"Error processing email {eid}. {e}"})
+
+    await asyncio.gather(*[handle_email(eid) for eid in email_ids])
+    return results
+
+# Cache Management
 def clear_email_cache():
-    fetch_cached_email.cache_clear()
-    get_logger().info("Email cache cleared")
+    fetch_email.cache_clear()
+    logger.info("Email cache cleared.")
 
 def reset_cache_stats():
-    fetch_cached_email.cache_clear()
-    get_logger().info("Cache statistics reset")
+    fetch_email.cache_clear()
+    logger.info("Cache statistics reset.")
 
 def get_cache_info(reset: bool = False) -> Dict[str, int]:
     if reset:
         reset_cache_stats()
-    info = fetch_cached_email.cache_info()
-    return {"hits": info.hits, "misses": info.misses, "maxsize": info.maxsize, "currsize": info.currsize}
-
-async def check_gmail_api_health() -> Dict[str, Any]:
-    logger_adapter = get_logger()
-    try:
-        service = get_gmail_service()
-        result = await asyncio.to_thread(resilient_api_call, service.users().getProfile, 'me')
-        return {"status": "healthy", "email": result.get('emailAddress'), "quota": {"limit": MAX_REQUESTS_PER_MINUTE, "period": ONE_MINUTE}}
-    except Exception as e:
-        logger_adapter.error(f"{ERROR_CODES['server_error']}: Health check failed: {e}")
-        return {"status": "unhealthy", "error": str(e)}
-
-async def get_email_labels(email_id: str) -> List[str]:
-    logger_adapter = get_logger({'email_id': email_id})
-    service = get_gmail_service()
-    try:
-        message = await asyncio.to_thread(resilient_api_call, service.users().messages().get, 'me', email_id, {'format': 'minimal'})
-        return message.get('labelIds', [])
-    except Exception as e:
-        logger_adapter.error(f"{ERROR_CODES['fetch_error']}: Failed to fetch labels for email {email_id}: {e}")
-        return []
-
-async def fetch_emails_by_label(label: str, max_results: int = 100) -> List[Dict[str, Any]]:
-    logger_adapter = get_logger({'label': label})
-    service = get_gmail_service()
-    try:
-        messages = await asyncio.to_thread(resilient_api_call, service.users().messages().list, 'me', labelIds=[label], maxResults=max_results)
-        if not messages.get('messages'):
-            logger_adapter.info(f"No messages found with label: {label}")
-            return []
-        return await fetch_email_batch([msg['id'] for msg in messages.get('messages', [])])
-    except Exception as e:
-        logger_adapter.error(f"{ERROR_CODES['fetch_error']}: Failed to fetch emails with label {label}: {e}")
-        return []
-
-def get_batch_statistics(results: List[Dict[str, Any]]) -> Dict[str, Any]:
-    total = len(results)
-    successful = sum(1 for r in results if "error" not in r)
-    failed = total - successful
-    success_rate = f"{(successful / total * 100):.2f}%" if total else "0.00%"
-    return {"total": total, "successful": successful, "failed": failed, "success_rate": success_rate}
-
-def generate_thread_summary(thread: Dict[str, Any]) -> Dict[str, Any]:
-    logger_adapter = get_logger({'thread_id': thread.get("thread_id")})
-    try:
-        timestamps = [msg["timestamp"] for msg in thread["messages"] if msg.get("timestamp")]
-        date_range = {"start": min(timestamps) if timestamps else None, "end": max(timestamps) if timestamps else None}
-        participants = list({msg["from"] for msg in thread["messages"] if msg.get("from")})
-        return {"thread_id": thread["thread_id"], "message_count": len(thread["messages"]), "date_range": date_range, "participants": participants, "subject": thread["subject"]}
-    except Exception as e:
-        logger_adapter.error(f"{ERROR_CODES['parse_error']}: Failed to generate thread summary: {e}")
-        return {"thread_id": thread.get("thread_id", "unknown"), "error": str(e)}
-
-async def search_emails(query: str, max_results: int = 10) -> List[Dict[str, Any]]:
-    logger_adapter = get_logger({'query': query})
-    if not query or not isinstance(query, str) or not query.strip():
-        logger_adapter.error(f"{ERROR_CODES['invalid_input']}: Invalid search query provided.")
-        raise HTTPException(status_code=400, detail={"error": {"code": ERROR_CODES['invalid_input'], "message": "Search query cannot be empty or invalid."}})
-    service = get_gmail_service()
-    try:
-        messages = await asyncio.to_thread(resilient_api_call, service.users().messages().list, 'me', q=query, maxResults=max_results)
-        message_ids = [msg['id'] for msg in messages.get('messages', [])]
-        return await fetch_email_batch(message_ids)
-    except Exception as e:
-        logger_adapter.error(f"{ERROR_CODES['fetch_error']}: Failed to search emails: {e}")
-        return []
-
-def decode_attachment(service: Any, message_id: str, attachment_id: str) -> Dict[str, Any]:
-    logger_adapter = get_logger({'message_id': message_id, 'attachment_id': attachment_id})
-    try:
-        attachment = resilient_api_call(service.users().messages().attachments().get, userId='me', messageId=message_id, id=attachment_id)
-        if 'data' not in attachment:
-            logger_adapter.warning(f"{ERROR_CODES['parse_error']}: Missing 'data' in attachment {attachment_id} for message {message_id}.")
-            return {'filename': 'UNKNOWN_FILENAME', 'mimeType': None, 'size': None, 'data': None, 'error': 'Attachment decoding failed'}
-        data = base64.urlsafe_b64decode(attachment['data'])
-        metadata = {"filename": "UNKNOWN_FILENAME", "mimeType": attachment.get("mimeType", "application/octet-stream"), "size": len(data)}
-        logger_adapter.info(f"Decoded attachment: {metadata['filename']}, size: {metadata['size']} bytes")
-        return {**metadata, 'data': data}
-    except Exception as e:
-        logger_adapter.error(f"{ERROR_CODES['server_error']}: Error decoding attachment {attachment_id} for message {message_id}. Cause: {e}")
-        return {'filename': 'UNKNOWN_FILENAME', 'mimeType': None, 'size': None, 'data': None, 'error': str(e)}
-
-async def fetch_email(email_id: str) -> Dict[str, Any]:
-    logger_adapter = get_logger({'email_id': email_id})
-    service = get_gmail_service()
-    try:
-        logger_adapter.info(f"Fetching email with ID: {email_id}")
-        message = await asyncio.to_thread(resilient_api_call, service.users().messages().get, 'me', email_id, {'format': 'full'})
-        thread_id = message.get('threadId')
-        if not thread_id:
-            error_msg = f"{ERROR_CODES['fetch_error']}: Thread ID not found for email ID: {email_id}"
-            logger_adapter.error(error_msg)
-            raise HTTPException(status_code=404, detail={"error": {"code": ERROR_CODES['fetch_error'], "message": error_msg}})
-        logger_adapter.info(f"Email ID: {email_id} belongs to thread ID: {thread_id}")
-    except HttpError as e:
-        logger_adapter.error(f"{ERROR_CODES['fetch_error']}: HTTP error while fetching email {email_id}. Cause: {e}")
-        raise HTTPException(status_code=e.resp.status, detail={"error": {"code": ERROR_CODES['fetch_error'], "message": "Failed to fetch email due to an HTTP error."}})
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger_adapter.error(f"{ERROR_CODES['server_error']}: Unexpected error while fetching email {email_id}. Cause: {e}")
-        raise HTTPException(status_code=500, detail={"error": {"code": ERROR_CODES['server_error'], "message": "Unexpected error while fetching email."}})
-    try:
-        logger_adapter.info(f"Fetching thread with ID: {thread_id}")
-        thread = await asyncio.to_thread(resilient_api_call, service.users().threads().get, 'me', thread_id, {'format': 'full'})
-        messages = thread.get('messages', [])
-        if not messages:
-            error_msg = f"{ERROR_CODES['fetch_error']}: No messages found in thread ID: {thread_id}"
-            logger_adapter.error(error_msg)
-            raise HTTPException(status_code=404, detail={"error": {"code": ERROR_CODES['fetch_error'], "message": error_msg}})
-        sorted_messages = sorted(messages, key=lambda msg: int(msg.get('internalDate', '0')))
-        logger_adapter.info(f"Fetched {len(sorted_messages)} messages in thread ID: {thread_id}")
-    except HttpError as e:
-        logger_adapter.error(f"{ERROR_CODES['fetch_error']}: HTTP error while fetching thread {thread_id}. Cause: {e}")
-        raise HTTPException(status_code=e.resp.status, detail={"error": {"code": ERROR_CODES['fetch_error'], "message": "Failed to fetch thread due to an HTTP error."}})
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger_adapter.error(f"{ERROR_CODES['server_error']}: Unexpected error while fetching thread {thread_id}. Cause: {e}")
-        raise HTTPException(status_code=500, detail={"error": {"code": ERROR_CODES['server_error'], "message": "Unexpected error while fetching thread."}})
-    processed_messages = [extract_message_details(service, msg) for msg in sorted_messages if extract_message_details(service, msg)]
-    if not processed_messages:
-        error_msg = f"{ERROR_CODES['parse_error']}: All messages in thread ID: {thread_id} are malformed or empty."
-        logger_adapter.error(error_msg)
-        raise HTTPException(status_code=500, detail={"error": {"code": ERROR_CODES['parse_error'], "message": error_msg}})
-    return combine_thread_messages(thread_id, processed_messages)
-
-async def fetch_email_batch(email_ids: List[str], batch_size: Optional[int] = None) -> List[Dict[str, Any]]:
-    batch_size = batch_size or min(10, MAX_REQUESTS_PER_MINUTE)
-    results = []
-    for i in range(0, len(email_ids), batch_size):
-        batch = email_ids[i:i + batch_size]
-        batch_results = await asyncio.gather(*[asyncio.to_thread(fetch_cached_email, eid) for eid in batch], return_exceptions=True)
-        for res in batch_results:
-            if isinstance(res, Exception):
-                if isinstance(res, HTTPException):
-                    logger.error(f"{res.detail['error']['code']}: {res.detail['error']['message']}")
-                    results.append({"error": res.detail["error"]})
-                else:
-                    logger.error(f"{ERROR_CODES['server_error']}: Error fetching email in batch. Cause: {res}")
-                    results.append({"error": {"code": ERROR_CODES['server_error'], "message": "Unexpected error during batch email fetching."}})
-            else:
-                results.append(res)
-    return results
+    info = fetch_email.cache_info()
+    return {
+        "hits": info.hits,
+        "misses": info.misses,
+        "maxsize": info.maxsize,
+        "currsize": info.currsize
+    }

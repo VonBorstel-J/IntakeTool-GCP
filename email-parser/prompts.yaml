@@ -28,7 +28,7 @@ rate_limit:
   parse_email: "10 per minute"
 
 parser:
-  prompt_template: |
+  email_parsing: |
         [INSTRUCTION]
     You are an advanced email parsing assistant. Your task is to extract specific information from the provided email thread and any attachments, outputting it in JSON format that exactly matches the specified schema. Use only the information explicitly stated in the emails or attachments. Be resilient to typos and varied phrasing.
 
@@ -95,7 +95,7 @@ parser:
     {{attachments_content}}
 
    **Output Format:**
-
+        EXAMPLE
 ```json
 {
   "assigner_name": "John Doe",

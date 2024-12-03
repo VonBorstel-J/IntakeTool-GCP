@@ -7,11 +7,10 @@ WORKDIR /app
 COPY requirements.txt .
 
 # Upgrade pip and install Python dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends gcc \
+RUN apt-get update && apt-get install -y --no-install-recommends gcc curl \
     && pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt \
     && apt-get remove -y gcc && apt-get autoremove -y && apt-get clean
-
 # Copy the entire application source code to the container
 COPY . .
 

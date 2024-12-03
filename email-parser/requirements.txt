@@ -1,5 +1,6 @@
 annotated-types
 anyio
+async_lru
 cachetools
 certifi
 charset-normalizer

@@ -5,10 +5,16 @@ document.addEventListener('DOMContentLoaded', () => {
     const statusText = document.getElementById('status-text');
     const logsContainer = document.getElementById('logs');
     const emailIdForm = document.getElementById('email-id-form');
+    const labelForm = document.getElementById('label-form'); 
     const customTextForm = document.getElementById('custom-text-form');
     const progressBar = document.getElementById('progress-bar');
     const progressSteps = document.getElementById('progress-steps');
     const parsedResults = document.getElementById('parsed-results');
+    const loginButton = document.getElementById('login-button'); 
+    const logoutButton = document.getElementById('logout-button'); 
+    const labelSelect = document.getElementById('labelSelect'); 
+
+    let isAuthenticated = false; 
 
     // Function to update status
     async function updateStatus() {
@@ -57,6 +63,14 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             payload = { email_id: emailId };
             addLog(`Submitting Email ID: ${emailId}`);
+        } else if (type === 'label') { 
+            const label = labelSelect.value;
+            if (!label) {
+                alert('Please select a label.');
+                return;
+            }
+            payload = { label_name: label };
+            addLog(`Submitting Label: ${label}`);
         } else if (type === 'custom') {
             const customText = document.getElementById('customTextInput').value.trim();
             if (!customText) {
@@ -71,11 +85,17 @@ document.addEventListener('DOMContentLoaded', () => {
         resetProgress();
         clearParsedResults();
 
-        // Mock backend interaction if service is down
+        // Backend interaction
         try {
             let response, data;
             if (type === 'email') {
                 response = await fetch('/api/parse-email', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+            } else if (type === 'label') { // Handle Label Parsing
+                response = await fetch('/api/parse-label', { 
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload)
@@ -185,9 +205,88 @@ document.addEventListener('DOMContentLoaded', () => {
         };
     }
 
+    // Function to handle OAuth2 Login
+    async function handleLogin() {
+        try {
+            const response = await fetch('/api/login', { method: 'POST' });
+            if (response.ok) {
+                isAuthenticated = true;
+                updateAuthUI();
+                addLog('User authenticated successfully.');
+                populateLabels(); 
+            } else {
+                throw new Error('Authentication failed.');
+            }
+        } catch (error) {
+            addLog('Authentication error: Unable to log in.');
+            console.error('Login Error:', error);
+        }
+    }
+
+    // Function to handle OAuth2 Logout
+    async function handleLogout() {
+        try {
+            const response = await fetch('/api/logout', { method: 'POST' });
+            if (response.ok) {
+                isAuthenticated = false;
+                updateAuthUI();
+                addLog('User logged out successfully.');
+                clearLabels();
+            } else {
+                throw new Error('Logout failed.');
+            }
+        } catch (error) {
+            addLog('Logout error: Unable to log out.');
+            console.error('Logout Error:', error);
+        }
+    }
+
+    // Update Authentication UI
+    function updateAuthUI() {
+        if (isAuthenticated) {
+            loginButton.style.display = 'none';
+            logoutButton.style.display = 'inline-block';
+        } else {
+            loginButton.style.display = 'inline-block';
+            logoutButton.style.display = 'none';
+            clearLabels();
+        }
+    }
+
+    // Populate Labels Dropdown
+    async function populateLabels() {
+        try {
+            const response = await fetch('/api/list-labels'); // API endpoint to list labels
+            if (!response.ok) throw new Error('Failed to fetch labels.');
+            const data = await response.json();
+            const labels = data.labels || [];
+            labelSelect.innerHTML = '<option value="" disabled selected>Choose a label...</option>'; 
+            labels.forEach(label => {
+                const option = document.createElement('option');
+                option.value = label;
+                option.textContent = label;
+                labelSelect.appendChild(option);
+            });
+            addLog('Labels fetched and populated.');
+        } catch (error) {
+            addLog('Error fetching labels.');
+            console.error('Populate Labels Error:', error);
+        }
+    }
+
+    // Clear Labels Dropdown
+    function clearLabels() {
+        labelSelect.innerHTML = '<option value="" disabled selected>Choose a label...</option>';
+    }
+
     // Event listeners for form submissions
     emailIdForm.addEventListener('submit', (e) => handleFormSubmit(e, 'email'));
+    labelForm.addEventListener('submit', (e) => handleFormSubmit(e, 'label')); 
     customTextForm.addEventListener('submit', (e) => handleFormSubmit(e, 'custom'));
+
+    // Event listeners for login and logout
+    loginButton.addEventListener('click', handleLogin);
+    logoutButton.addEventListener('click', handleLogout);
 
     // Initial status check
     updateStatus();

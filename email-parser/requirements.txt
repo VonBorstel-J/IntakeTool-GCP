@@ -1,3 +1,4 @@
+# Core Utilities
 annotated-types
 anyio
 async_lru
@@ -6,33 +7,59 @@ certifi
 charset-normalizer
 click
 colorama
-fastapi
-google-api-core
-google-api-python-client
-google-cloud-aiplatform
-google-auth
-google-auth-httplib2
-googleapis-common-protos
-h11
+pyparsing
+python-dotenv
+typing_extensions
+
+# HTTP and Requests
+requests
 httplib2
 idna
+urllib3
+
+# Authentication
+python-jose[cryptography]
+passlib[bcrypt]
+
+# Google Cloud APIs
+google-api-core
+google-api-python-client
+google-cloud-secret-manager
+google-cloud-aiplatform
+google-cloud-storage
+google-cloud-vision
+google-cloud-documentai
+google-auth
+google-auth-httplib2
+google-auth-oauthlib
+googleapis-common-protos
+
+# Protobuf and Protocol Buffers
 proto-plus
 protobuf
+
+# Authentication
 pyasn1
 pyasn1_modules
+rsa
+
+# Web Framework
+fastapi
+starlette
+uvicorn
+
+# API Throttling
+slowapi
+tenacity
+
+# Data Validation
 pydantic
 pydantic-settings
 pydantic_core
-pyparsing
-python-dotenv
-requests
-rsa
-sniffio
-slowapi
-starlette
-tenacity
-typing_extensions
-uritemplate
-urllib3
-uvicorn
+
+# YAML Support
 PyYAML
+
+# Miscellaneous
+sniffio
+uritemplate

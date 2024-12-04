@@ -83,3 +83,5 @@ target/
 
 # Windows
 Thumbs.db
+
+service.json

@@ -1,104 +1,164 @@
-#gemini_utils.py
+# gemini_utils.py
+
 import os
 import yaml
 import asyncio
-from typing import Dict, Any, List
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from typing import Dict, Any, List, Optional
+from google.api_core.retry import Retry
 from google.api_core.exceptions import GoogleAPICallError
 from google.cloud import aiplatform
-from config import get_logger, settings
+from config import settings, get_logger
 from exceptions import GeminiAPIError, PromptError, ParseError
 
 logger = get_logger({"module": "gemini_utils"})
 
+# Initialize GCP Clients Globally
+class GCPClients:
+    vertex_ai_endpoint: Optional[aiplatform.Endpoint] = None
+
+    @classmethod
+    async def initialize_vertex_ai_endpoint(cls):
+        mock_vertex_ai = os.getenv("MOCK_VERTEX_AI", "false").lower() == "true"
+        if mock_vertex_ai:
+            logger.warning("Vertex AI is mocked for development.")
+            cls.vertex_ai_endpoint = None
+            return
+        try:
+            aiplatform.init(project=settings.GCP_PROJECT_ID, location=settings.GCP_LOCATION)
+            cls.vertex_ai_endpoint = aiplatform.Endpoint(endpoint_name=settings.GEMINI_ENDPOINT)
+            logger.info("Vertex AI endpoint initialized successfully.", extra={"endpoint": settings.GEMINI_ENDPOINT})
+        except Exception as e:
+            logger.error("Failed to initialize Vertex AI endpoint.", exc_info=True, extra={"error": str(e)})
+            raise GeminiAPIError("Failed to initialize Vertex AI endpoint.") from e
+
+# Initialize Vertex AI Endpoint on module load
+asyncio.create_task(GCPClients.initialize_vertex_ai_endpoint())
+
 def load_prompts(file_path: str = "prompts.yaml") -> Dict[str, str]:
+    """
+    Load prompt templates from a YAML file and validate them.
+    """
     try:
         with open(file_path, 'r') as file:
-            prompts = yaml.safe_load(file)
+            prompts = yaml.safe_load(file) or {}
             for template_name, template in prompts.items():
                 validate_prompt_template(template, required_keys=[])
+            logger.info(f"Loaded {len(prompts)} prompt templates from {file_path}.")
             return prompts
+    except FileNotFoundError:
+        logger.error(f"Prompts file not found: {file_path}")
+        raise PromptError(f"Prompts file not found: {file_path}")
+    except yaml.YAMLError as e:
+        logger.error(f"YAML parsing error in {file_path}: {e}")
+        raise PromptError(f"YAML parsing error: {e}")
     except Exception as e:
-        logger.error(f"Error loading prompts from {file_path}. Error: {e}")
-        raise PromptError("Failed to load prompts.")
+        logger.error(f"Unexpected error loading prompts: {e}", exc_info=True)
+        raise PromptError("Failed to load prompts due to an unexpected error.") from e
 
-def validate_prompt_template(template: str, required_keys: List[str]):
-    for key in required_keys:
-        if f"{{{{{key}}}}}" not in template:
-            raise PromptError(f"Template missing required key: {key}")
+def validate_prompt_template(template: str, required_keys: List[str]) -> None:
+    """
+    Ensure that the prompt template contains all required placeholders.
+    """
+    missing_keys = [key for key in required_keys if f"{{{{{key}}}}}" not in template]
+    if missing_keys:
+        error_msg = f"Template missing required keys: {', '.join(missing_keys)}"
+        logger.error(error_msg)
+        raise PromptError(error_msg)
 
 def validate_prompt_length(prompt: str, max_length: int = 5000) -> None:
+    """
+    Ensure the prompt does not exceed the maximum allowed length.
+    """
     if len(prompt) > max_length:
-        logger.error(f"Prompt length {len(prompt)} exceeds maximum allowed length {max_length}.")
-        raise PromptError("Prompt exceeds maximum length.")
+        logger.error(f"Prompt length {len(prompt)} exceeds maximum of {max_length} characters.")
+        raise PromptError("Prompt exceeds the maximum allowed length.")
+
+def sanitize_input(value: Any) -> Any:
+    """
+    Sanitize input to prevent injection attacks by escaping braces.
+    """
+    if isinstance(value, str):
+        return value.replace("{", "{{").replace("}", "}}")
+    return value
+
+def sanitize_context(context: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Sanitize all values in the context dictionary.
+    """
+    return {key: sanitize_input(value) for key, value in context.items()}
 
 PROMPTS = load_prompts()
 
 def generate_prompt(template_name: str, context: Dict[str, Any]) -> str:
+    """
+    Generate a prompt by formatting the specified template with the provided context.
+    """
     template = PROMPTS.get(template_name)
     if not template:
-        logger.error(f"Template '{template_name}' not found.")
+        logger.error("Prompt template not found.", extra={"template_name": template_name})
         raise PromptError(f"Prompt template '{template_name}' not found.")
+    
     try:
-        prompt = template.format(**context)
+        sanitized_context = sanitize_context(context)
+        prompt = template.format(**sanitized_context)
         validate_prompt_length(prompt)
+        logger.debug("Prompt generated successfully.", extra={"template_name": template_name})
         return prompt
     except KeyError as e:
-        logger.error(f"Missing key in context for template '{template_name}'. Context: {context}, Error: {e}")
-        raise PromptError(f"Missing key in context: {e}")
+        logger.error("Missing key in context for prompt generation.", extra={
+            "template_name": template_name,
+            "missing_key": str(e)
+        })
+        raise PromptError(f"Missing key in context: {e}") from e
     except Exception as e:
-        logger.error(f"Error generating prompt. Template: {template_name}, Context: {context}, Error: {e}")
-        raise PromptError("Error generating prompt.")
+        logger.error("Error during prompt generation.", extra={
+            "template_name": template_name,
+            "error": str(e)
+        })
+        raise PromptError("Error generating prompt.") from e
 
-def get_endpoint():
-    endpoint = None
-    def _get_endpoint():
-        nonlocal endpoint
-        if endpoint is not None:
-            return endpoint
-        if os.getenv("MOCK_VERTEX_AI", "false").lower() == "true":
-            logger.warning("Vertex AI is mocked for development.")
-            return None
-        try:
-            aiplatform.init(project=settings.GCP_PROJECT_ID, location=settings.GCP_LOCATION)
-            endpoint_instance = aiplatform.Endpoint(endpoint_name=settings.GEMINI_ENDPOINT)
-            logger.info("Initialized Vertex AI endpoint.")
-            endpoint = endpoint_instance
-            return endpoint
-        except Exception as e:
-            logger.error(f"Failed to initialize Vertex AI. Error: {e}")
-            raise GeminiAPIError("Failed to initialize AI platform.")
-    return _get_endpoint
-
-get_endpoint = get_endpoint()
-
-@retry(
-    retry=retry_if_exception_type(GoogleAPICallError),
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=1, max=10),
-    reraise=True
-)
 async def call_gemini_api(prompt: str) -> Dict[str, Any]:
-    endpoint = get_endpoint()
-    if endpoint is None:
-        if os.getenv("MOCK_VERTEX_AI", "false").lower() == "true":
-            logger.info("MOCK_VERTEX_AI is enabled. Returning mock response.")
-            return {"predictions": ["Mock response"]}
-        else:
-            logger.error("Endpoint is not initialized.")
-            raise GeminiAPIError("Endpoint is not initialized.")
+    """
+    Asynchronously call the Gemini API with the provided prompt.
+    Utilizes asyncio.to_thread to prevent blocking the event loop.
+    """
+    mock_vertex_ai = os.getenv("MOCK_VERTEX_AI", "false").lower() == "true"
+    if GCPClients.vertex_ai_endpoint is None and not mock_vertex_ai:
+        logger.error("Vertex AI endpoint is not initialized.")
+        raise GeminiAPIError("Vertex AI endpoint is not initialized.")
+    
+    if mock_vertex_ai:
+        logger.info("MOCK_VERTEX_AI enabled. Returning mock response.")
+        return {"predictions": ["Mock response"]}
+    
     try:
-        # Expected response structure: {"predictions": [...]}
-        response = await asyncio.to_thread(endpoint.predict, instances=[{"prompt": prompt}])
+        # Define a retry strategy using Vertex AI client's built-in retries
+        retry_strategy = Retry(
+            initial=1.0,
+            maximum=10.0,
+            multiplier=2.0,
+            deadline=30.0,
+            predicate=lambda exc: isinstance(exc, GoogleAPICallError)
+        )
+        logger.debug("Calling Vertex AI endpoint.", extra={"action": "Gemini API call"})
+        response = await asyncio.to_thread(
+            GCPClients.vertex_ai_endpoint.predict,
+            instances=[{"prompt": prompt}],
+            retry=retry_strategy
+        )
+        logger.debug("Gemini API call successful.", extra={"response": response})
         return response
     except GoogleAPICallError as e:
-        logger.error(f"Google API call error during Gemini API call. Error: {e}")
-        raise GeminiAPIError("Gemini API call failed.")
+        logger.error("Google API call error during Gemini API interaction.", extra={"error": str(e)})
+        raise GeminiAPIError("Gemini API call failed due to a Google API error.") from e
     except Exception as e:
-        logger.error(f"Error during Gemini API call. Error: {e}")
-        raise GeminiAPIError("Error communicating with Gemini API.")
+        logger.error("Unexpected error during Gemini API interaction.", extra={"error": str(e)})
+        raise GeminiAPIError("An unexpected error occurred while communicating with Gemini API.") from e
 
 def parse_email_content(email_content: Dict[str, Any]) -> str:
+    """
+    Parse email content and generate a prompt for the Gemini API.
+    """
     try:
         context = {
             "subject": email_content.get("subject", ""),
@@ -108,7 +168,8 @@ def parse_email_content(email_content: Dict[str, Any]) -> str:
             )
         }
         prompt = generate_prompt("email_parsing", context)
+        logger.debug("Email content parsed and prompt generated.", extra={"context": context})
         return prompt
     except PromptError as e:
-        logger.error(f"Error generating prompt from email content. Error: {e}")
-        raise ParseError("Failed to generate prompt from email content.")
+        logger.error("Failed to generate prompt from email content.", extra={"error": str(e)})
+        raise ParseError("Failed to generate prompt from email content.") from e

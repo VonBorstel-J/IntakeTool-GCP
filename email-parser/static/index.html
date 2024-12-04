@@ -23,6 +23,15 @@
         </div>
     </div>
 
+    <!-- Authentication Section -->
+    <div class="container mt-3">
+        <!-- NEW: OAuth2 Authentication Button -->
+        <div class="d-flex justify-content-end">
+            <button id="login-button" class="btn btn-success">Login with Gmail</button>
+            <button id="logout-button" class="btn btn-danger ms-2" style="display: none;">Logout</button>
+        </div>
+    </div>
+
     <!-- Logs Section -->
     <div class="container mt-3">
         <h3>Logs</h3>
@@ -34,10 +43,14 @@
     <!-- Input Section -->
     <div class="container mt-3">
         <h3>Input</h3>
-        <!-- Tabs for Email ID and Custom Text Input -->
+        <!-- Tabs for Email ID, Label Selection, and Custom Text Input -->
         <ul class="nav nav-tabs" id="inputTabs" role="tablist">
             <li class="nav-item" role="presentation">
                 <button class="nav-link active" id="email-id-tab" data-bs-toggle="tab" data-bs-target="#email-id" type="button" role="tab" aria-controls="email-id" aria-selected="true">Email ID Input</button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <!-- NEW: Label Selection Tab -->
+                <button class="nav-link" id="label-tab" data-bs-toggle="tab" data-bs-target="#label" type="button" role="tab" aria-controls="label" aria-selected="false">Label Selection</button>
             </li>
             <li class="nav-item" role="presentation">
                 <button class="nav-link" id="custom-text-tab" data-bs-toggle="tab" data-bs-target="#custom-text" type="button" role="tab" aria-controls="custom-text" aria-selected="false">Custom Text Input</button>
@@ -52,6 +65,19 @@
                         <input type="text" class="form-control" id="emailIdInput" placeholder="e.g., abc123@example.com" required>
                     </div>
                     <button type="submit" class="btn btn-primary">Parse Email ID</button>
+                </form>
+            </div>
+            <!-- NEW: Label Selection Tab -->
+            <div class="tab-pane fade" id="label" role="tabpanel" aria-labelledby="label-tab">
+                <form id="label-form">
+                    <div class="mb-3">
+                        <label for="labelSelect" class="form-label">Select Email Label</label>
+                        <select class="form-select" id="labelSelect" required>
+                            <option value="" disabled selected>Choose a label...</option>
+                            <!-- Labels will be populated here dynamically -->
+                        </select>
+                    </div>
+                    <button type="submit" class="btn btn-primary">Fetch Emails by Label</button>
                 </form>
             </div>
             <!-- Custom Text Input Tab -->

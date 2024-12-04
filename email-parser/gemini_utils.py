@@ -4,35 +4,12 @@ import os
 import yaml
 import asyncio
 from typing import Dict, Any, List, Optional
-from google.api_core.retry import Retry
 from google.api_core.exceptions import GoogleAPICallError
-from google.cloud import aiplatform
 from config import settings, get_logger
 from exceptions import GeminiAPIError, PromptError, ParseError
+import aiohttp
 
 logger = get_logger({"module": "gemini_utils"})
-
-# Initialize GCP Clients Globally
-class GCPClients:
-    vertex_ai_endpoint: Optional[aiplatform.Endpoint] = None
-
-    @classmethod
-    async def initialize_vertex_ai_endpoint(cls):
-        mock_vertex_ai = os.getenv("MOCK_VERTEX_AI", "false").lower() == "true"
-        if mock_vertex_ai:
-            logger.warning("Vertex AI is mocked for development.")
-            cls.vertex_ai_endpoint = None
-            return
-        try:
-            aiplatform.init(project=settings.GCP_PROJECT_ID, location=settings.GCP_LOCATION)
-            cls.vertex_ai_endpoint = aiplatform.Endpoint(endpoint_name=settings.GEMINI_ENDPOINT)
-            logger.info("Vertex AI endpoint initialized successfully.", extra={"endpoint": settings.GEMINI_ENDPOINT})
-        except Exception as e:
-            logger.error("Failed to initialize Vertex AI endpoint.", exc_info=True, extra={"error": str(e)})
-            raise GeminiAPIError("Failed to initialize Vertex AI endpoint.") from e
-
-# Initialize Vertex AI Endpoint on module load
-asyncio.create_task(GCPClients.initialize_vertex_ai_endpoint())
 
 def load_prompts(file_path: str = "prompts.yaml") -> Dict[str, str]:
     """
@@ -119,35 +96,32 @@ def generate_prompt(template_name: str, context: Dict[str, Any]) -> str:
 
 async def call_gemini_api(prompt: str) -> Dict[str, Any]:
     """
-    Asynchronously call the Gemini API with the provided prompt.
-    Utilizes asyncio.to_thread to prevent blocking the event loop.
+    Asynchronously call the Gemini API with the provided prompt using HTTP requests.
     """
     mock_vertex_ai = os.getenv("MOCK_VERTEX_AI", "false").lower() == "true"
-    if GCPClients.vertex_ai_endpoint is None and not mock_vertex_ai:
-        logger.error("Vertex AI endpoint is not initialized.")
-        raise GeminiAPIError("Vertex AI endpoint is not initialized.")
-    
     if mock_vertex_ai:
         logger.info("MOCK_VERTEX_AI enabled. Returning mock response.")
         return {"predictions": ["Mock response"]}
     
+    headers = {
+        "Authorization": f"Bearer {settings.GEMINI_API_KEY.get_secret_value()}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "instances": [{"prompt": prompt}],
+        "parameters": {}
+    }
+    
     try:
-        # Define a retry strategy using Vertex AI client's built-in retries
-        retry_strategy = Retry(
-            initial=1.0,
-            maximum=10.0,
-            multiplier=2.0,
-            deadline=30.0,
-            predicate=lambda exc: isinstance(exc, GoogleAPICallError)
-        )
-        logger.debug("Calling Vertex AI endpoint.", extra={"action": "Gemini API call"})
-        response = await asyncio.to_thread(
-            GCPClients.vertex_ai_endpoint.predict,
-            instances=[{"prompt": prompt}],
-            retry=retry_strategy
-        )
-        logger.debug("Gemini API call successful.", extra={"response": response})
-        return response
+        async with aiohttp.ClientSession() as session:
+            async with session.post(settings.GEMINI_ENDPOINT, json=payload, headers=headers) as response:
+                if response.status != 200:
+                    error_text = await response.text()
+                    logger.error("Gemini API call failed.", extra={"status": response.status, "error": error_text})
+                    raise GeminiAPIError(f"Gemini API call failed with status {response.status}: {error_text}")
+                result = await response.json()
+                logger.debug("Gemini API call successful.", extra={"response": result})
+                return result
     except GoogleAPICallError as e:
         logger.error("Google API call error during Gemini API interaction.", extra={"error": str(e)})
         raise GeminiAPIError("Gemini API call failed due to a Google API error.") from e
@@ -161,10 +135,10 @@ def parse_email_content(email_content: Dict[str, Any]) -> str:
     """
     try:
         context = {
-            "subject": email_content.get("subject", ""),
+            "subject": email_content.get("metadata", {}).get("subject", ""),
             "body": email_content.get("body", ""),
             "attachments_info": ", ".join(
-                att.get('filename', '') for att in email_content.get('attachments', [])
+                att.get('attachment_name', '') for att in email_content.get('attachments', [])
             )
         }
         prompt = generate_prompt("email_parsing", context)

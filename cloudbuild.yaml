@@ -37,6 +37,7 @@ steps:
       - ATTACHMENT_OCR_PROCESSOR_ID
       - ATTACHMENT_OCR_REGION
       - QUICKBASE_API_TOKEN
+      - DOCUMENT_AI_PROCESSOR_ID
 
 # Specify secrets to load
 availableSecrets:
@@ -69,6 +70,8 @@ availableSecrets:
       env: "GMAIL_API_KEY"
     - versionName: "projects/$PROJECT_ID/secrets/intake-tool-quickbase-token/versions/latest"
       env: "QUICKBASE_API_TOKEN"
+    - versionName: "projects/$PROJECT_ID/secrets/DOCUMENT_AI_PROCESSOR_ID/versions/latest"
+      env: "DOCUMENT_AI_PROCESSOR_ID"
 
 # Images to push
 images:

@@ -5,6 +5,7 @@ WORKDIR /app
 
 # Copy requirements file
 COPY requirements.txt .
+COPY service.json /app/service.json  
 
 # Install dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends gcc \

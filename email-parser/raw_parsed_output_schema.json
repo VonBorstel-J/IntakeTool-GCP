@@ -1,0 +1,26 @@
+[
+    {
+        "name": "email_id",
+        "type": "STRING",
+        "mode": "REQUIRED",
+        "description": "Unique identifier for the email."
+    },
+    {
+        "name": "parsed_timestamp",
+        "type": "TIMESTAMP",
+        "mode": "REQUIRED",
+        "description": "Timestamp when the raw output was parsed."
+    },
+    {
+        "name": "raw_parsed_output",
+        "type": "STRING",
+        "mode": "REQUIRED",
+        "description": "Raw parsed output from the email or attachments."
+    },
+    {
+        "name": "parser_version",
+        "type": "STRING",
+        "mode": "NULLABLE",
+        "description": "Version of the parser used to process the data."
+    }
+]

@@ -1,3 +1,5 @@
+#config.py
+
 import os
 import logging
 from secrets_utils import get_secret  # Ensure this utility is correctly implemented
@@ -94,11 +96,6 @@ def validate_environment_variables(settings: Settings):
         # Log warnings for missing variables
         for var in missing_vars:
             print(f"Warning: Missing environment variable: {var}")
-
-        # Optionally, assign default values to prevent breaking functionality
-        # Example (uncomment if desired):
-        # settings.DOCUMENT_AI_PROCESSOR_ID = "default_processor_id"
-
 
 def load_secrets(settings: Settings):
     """

@@ -1,10 +1,14 @@
-#prompts.yaml 
+# prompts.yaml
+
 ai:
   generative_ai:
     provider: "google"
     google:
       endpoint: "https://generativeai.googleapis.com"
-      max_tokens: 2000
+      max_tokens: 250000  # Gemini supports 1milly to 2milly depending on model
+      temperature: 0.3  
+      top_p: 0.95  # exploration
+      top_k: 50    # Lower this for token exploration for consistency bands
 
 logging:
   level: "INFO"
@@ -12,15 +16,15 @@ logging:
 
 batch_processing:
   enabled: true
-  batch_size: 20
+  batch_size: 100  
 
 dynamic_token_adjustment:
   enabled: true
-  max_tokens_threshold: 2500
+  max_tokens_threshold: 250000  # Will scale up from here 
 
 caching:
   enabled: true
-  ttl: 7200
+  ttl: 7200  # Cache prompt templates for 2 hours
   dir: "./cache"
 
 rate_limit:
@@ -29,127 +33,148 @@ rate_limit:
 
 parser:
   email_parsing: |
-        [INSTRUCTION]
-    You are an advanced email parsing assistant. Your task is to extract specific information from the provided email thread and any attachments, outputting it in JSON format that exactly matches the specified schema. Use only the information explicitly stated in the emails or attachments. Be resilient to typos and varied phrasing.
+    You are an advanced assistant specializing in parsing insurance-related emails and documents for property claims. Your task is to extract fields and output data that conforms to this schema:
 
-    **Schema Fields and Instructions:**
+    Schema:
+    - assigner_name: STRING (nullable)
+    - assigner_email: STRING (nullable)
+    - assigner_phone: STRING (nullable)
+    - assigner_phone_extension: STRING (nullable)
+    - claim_number: STRING (nullable)
+    - policy_number: STRING (nullable)
+    - date_of_loss: DATE (nullable) - Format: YYYY-MM-DD
+    - client: STRING (nullable)
+    - insurance_carrier: STRING (nullable)
+    - insured_name: STRING (nullable)
+    - insured_phone_numbers: STRING (nullable) - Comma-separated if multiple.
+    - insured_email: STRING (nullable)
+    - risk_location_address: STRING (nullable)
+    - is_cat_event: BOOLEAN (nullable)
+    - cat_event_name: STRING (nullable)
+    - additional_party_name: STRING (nullable)
+    - additional_party_company: STRING (nullable)
+    - additional_party_phone: STRING (nullable)
+    - additional_party_email: STRING (nullable)
+    - services_description: STRING (nullable)
+    - expert_type_needed: STRING (nullable)
+    - damage_type: STRING (nullable)
+    - property_areas_to_inspect: STRING (nullable)
+    - budget_required_before_proceeding: BOOLEAN (nullable)
+    - number_of_buildings_units: INTEGER (nullable)
+    - call_required_before_inspection: BOOLEAN (nullable)
+    - call_required_after_inspection: BOOLEAN (nullable)
+    - repair_recommendations_needed: BOOLEAN (nullable)
+    - cost_estimate_required: BOOLEAN (nullable)
+    - tarp_removal_permission: BOOLEAN (nullable)
+    - tile_matching_info: STRING (nullable)
+    - roof_diagram_needed: BOOLEAN (nullable)
+    - notes_comments: STRING (nullable)
+    - attachments: ARRAY of RECORDS (nullable):
+      - attachment_name: STRING
+      - attachment_url: STRING
+      - attachment_content: STRING
+    - extracted_data_from_attachments: STRING (nullable)
+    - submission_date: TIMESTAMP (nullable)
+    - email_content: STRING (nullable)
+    - email_id: STRING (required)
+    - thread_id: STRING (nullable)
+    - message_ids: ARRAY of STRING (nullable)
 
-    - **assigner_name** (STRING, NULLABLE)
-    - **assigner_email** (STRING, NULLABLE)
-    - **assigner_phone** (STRING, NULLABLE)
-    - **assigner_phone_extension** (STRING, NULLABLE)
-    - **claim_number** (STRING, NULLABLE)
-    - **policy_number** (STRING, NULLABLE)
-    - **date_of_loss** (DATE, NULLABLE) - Format: YYYY-MM-DD
-    - **client** (STRING, NULLABLE)
-    - **insurance_carrier** (STRING, NULLABLE)
-    - **insured_name** (STRING, NULLABLE)
-    - **insured_phone_numbers** (STRING, NULLABLE) - Multiple numbers separated by commas
-    - **insured_email** (STRING, NULLABLE)
-    - **risk_location_address** (STRING, NULLABLE)
-    - **is_cat_event** (BOOLEAN, NULLABLE) - `true` or `false`
-    - **cat_event_name** (STRING, NULLABLE)
-    - **additional_party_name** (STRING, NULLABLE)
-    - **additional_party_company** (STRING, NULLABLE)
-    - **additional_party_phone** (STRING, NULLABLE)
-    - **additional_party_email** (STRING, NULLABLE)
-    - **services_description** (STRING, NULLABLE)
-    - **expert_type_needed** (STRING, NULLABLE)
-    - **damage_type** (STRING, NULLABLE)
-    - **property_areas_to_inspect** (STRING, NULLABLE)
-    - **budget_required_before_proceeding** (BOOLEAN, NULLABLE) - `true` or `false`
-    - **number_of_buildings_units** (INTEGER, NULLABLE)
-    - **call_required_before_inspection** (BOOLEAN, NULLABLE) - `true` or `false`
-    - **call_required_after_inspection** (BOOLEAN, NULLABLE) - `true` or `false`
-    - **repair_recommendations_needed** (BOOLEAN, NULLABLE) - `true` or `false`
-    - **cost_estimate_required** (BOOLEAN, NULLABLE) - `true` or `false`
-    - **tarp_removal_permission** (BOOLEAN, NULLABLE) - `true` or `false`
-    - **tile_matching_info** (STRING, NULLABLE)
-    - **roof_diagram_needed** (BOOLEAN, NULLABLE) - `true` or `false`
-    - **notes_comments** (STRING, NULLABLE)
-    - **attachments** (ARRAY of RECORDs, NULLABLE) with fields:
-      - **attachment_name** (STRING, NULLABLE)
-      - **attachment_url** (STRING, NULLABLE)
-      - **attachment_content** (STRING, NULLABLE)
-    - **extracted_data_from_attachments** (STRING, NULLABLE)
-    - **submission_date** (TIMESTAMP, NULLABLE)
-    - **email_content** (STRING, NULLABLE)
-    - **email_id** (STRING, NULLABLE)
-    - **thread_id** (STRING, NULLABLE)
-    - **message_ids** (ARRAY of STRING, NULLABLE)
+    Instructions:
+    - If a field cannot be found, set its value to `null`.
+    - Combine all relevant information from the email body, thread, and attachments.
+    - Include attachments as structured records.
+    - If an attachment cannot be processed, indicate `"attachment_content": null`.
+    - Ensure output matches the schema exactly, with no additional fields.
 
-    **Instructions:**
+    Examples:
 
-    - For any field not found in the email thread or attachments, set its value to `null` (without quotes).
-    - Do not infer or assume information not explicitly stated.
-    - If certain data is missing from the email body, look for it in the attachments.
-    - Combine information from all messages in the thread and attachments.
-    - Be concise and avoid repetition.
+    Example Input 1:
+    [Email Thread]
+    "Hi, here’s the policy and claim details. Policy Number: 12345, Claim Number: XYZ."
 
-    **Email Thread Content:**
+    [Attachments]
+    None.
 
+    Example Output 1:
+    {
+      "assigner_name": null,
+      "assigner_email": null,
+      "assigner_phone": null,
+      "assigner_phone_extension": null,
+      "claim_number": "XYZ",
+      "policy_number": "12345",
+      "date_of_loss": null,
+      "client": null,
+      "insurance_carrier": null,
+      "insured_name": null,
+      "insured_phone_numbers": null,
+      "insured_email": null,
+      "risk_location_address": null,
+      "is_cat_event": null,
+      "cat_event_name": null,
+      "additional_party_name": null,
+      "additional_party_company": null,
+      "additional_party_phone": null,
+      "additional_party_email": null,
+      "services_description": null,
+      "expert_type_needed": null,
+      "damage_type": null,
+      "property_areas_to_inspect": null,
+      "budget_required_before_proceeding": null,
+      "number_of_buildings_units": null,
+      "call_required_before_inspection": null,
+      "call_required_after_inspection": null,
+      "repair_recommendations_needed": null,
+      "cost_estimate_required": null,
+      "tarp_removal_permission": null,
+      "tile_matching_info": null,
+      "roof_diagram_needed": null,
+      "notes_comments": null,
+      "attachments": [],
+      "extracted_data_from_attachments": null,
+      "submission_date": "2023-12-05T10:30:00Z",
+      "email_content": "Hi, here’s the policy and claim details. Policy Number: 12345, Claim Number: XYZ.",
+      "email_id": "123abc",
+      "thread_id": "thread123",
+      "message_ids": ["msg1", "msg2"]
+    }
+
+    Example Input 2:
+    [Email Thread]
+    "Subject: Claim XYZ. Please find the details attached."
+
+    [Attachments]
+    Attachment 1:
+    - "Damage report: Roof severe damage."
+
+    Example Output 2:
+    {
+      "claim_number": "XYZ",
+      "policy_number": null,
+      "services_description": "Roof severe damage",
+      "attachments": [
+        {
+          "attachment_name": "Damage report.pdf",
+          "attachment_url": "https://storage.googleapis.com/bucket-name/Damage report.pdf",
+          "attachment_content": "Roof severe damage"
+        }
+      ],
+      "email_id": "456def",
+      "thread_id": "thread456",
+      "message_ids": ["msg3", "msg4"]
+    }
+
+    Now, parse the following input:
+
+    [Email Thread]
     {{email_thread_content}}
 
-    **Attachments Content:**
-
+    [Attachments]
     {{attachments_content}}
 
-   **Output Format:**
-        EXAMPLE
-```json
-{
-  "assigner_name": "John Doe",
-  "assigner_email": "john.doe@example.com",
-  "assigner_phone": "123-456-7890",
-  "assigner_phone_extension": null,
-  "claim_number": "CLM123456",
-  "policy_number": "POL987654",
-  "date_of_loss": "2023-10-15",
-  "client": "Acme Insurance",
-  "insurance_carrier": "Acme Insurance",
-  "insured_name": "Jane Smith",
-  "insured_phone_numbers": "555-1234, 555-5678",
-  "insured_email": "jane.smith@example.com",
-  "risk_location_address": "123 Main St, Anytown, USA",
-  "is_cat_event": true,
-  "cat_event_name": "Hurricane XYZ",
-  "additional_party_name": null,
-  "additional_party_company": null,
-  "additional_party_phone": null,
-  "additional_party_email": null,
-  "services_description": "Roof inspection needed due to storm damage.",
-  "expert_type_needed": "Roofing Expert",
-  "damage_type": "Wind Damage",
-  "property_areas_to_inspect": "Roof, Attic",
-  "budget_required_before_proceeding": false,
-  "number_of_buildings_units": 1,
-  "call_required_before_inspection": true,
-  "call_required_after_inspection": false,
-  "repair_recommendations_needed": true,
-  "cost_estimate_required": true,
-  "tarp_removal_permission": false,
-  "tile_matching_info": null,
-  "roof_diagram_needed": false,
-  "notes_comments": "Please expedite due to upcoming weather.",
-  "attachments": [
-    {
-      "attachment_name": "DamagePhotos.pdf",
-      "attachment_url": "https://storage.googleapis.com/your-bucket/DamagePhotos.pdf",
-      "attachment_content": null
-    }
-  ],
-  "extracted_data_from_attachments": null,
-  "submission_date": "2023-10-16T12:34:56Z",
-  "email_content": "Full email thread content here...",
-  "email_id": "123abc456def",
-  "thread_id": "thread123456",
-  "message_ids": ["msg1", "msg2"]
-}
-    ```
+    Output the parsed fields in JSON format matching the schema exactly.
 
-    Provide the extracted information in JSON format matching the field names and data types specified above.
-
-    [END OF INSTRUCTION]
 secrets:
   gemini_api_key: "${GEMINI_API_KEY}"
   gmail_api_credentials: "${GMAIL_API_CREDENTIALS}"

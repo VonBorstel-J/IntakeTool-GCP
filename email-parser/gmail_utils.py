@@ -13,7 +13,7 @@ from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from google.cloud import documentai_v1 as documentai
-from google.cloud import storage, vision, bigquery  # Added bigquery import
+from google.cloud import storage, vision, bigquery  # BigQuery import
 
 from config import settings, get_logger
 from exceptions import FetchError, ParseError, ServerError, GCPError, InvalidInputError
@@ -22,29 +22,32 @@ from datetime import datetime
 
 logger = get_logger()
 
-# Error Codes 
-ERROR_CODES = {
-    "fetch_error": "ERR001",
-    "parse_error": "ERR002",
-    "invalid_input": "ERR003",
-    "server_error": "ERR004",
-    "gcp_error": "ERR005",
-    "internal_error": "ERR_INTERNAL"
-}
+# ------------------------- Environment Variable Validation -------------------
 
-# TypedDicts for better type annotations
-class Attachment(TypedDict):
-    filename: str
-    mimeType: str
-    data: bytes
-    gcs_uri: Optional[str]
+def validate_env_variables():
+    """
+    Validates critical environment variables at startup.
+    Logs warnings for missing or malformed variables without crashing.
+    """
+    required_vars = {
+        "GMAIL_API_KEY": settings.GMAIL_API_KEY,
+        "EMAIL_ATTACHMENT_BUCKET": settings.EMAIL_ATTACHMENT_BUCKET,
+        "SECRET_KEY": settings.SECRET_KEY,
+    }
 
-class EmailContent(TypedDict):
-    message_id: str
-    thread_id: str
-    metadata: Dict[str, str]
-    body: str
-    attachments: List[Dict[str, Any]]
+    for var, value in required_vars.items():
+        if not value:
+            logger.warning(f"Missing required environment variable: {var}")
+        else:
+            logger.debug(f"Environment variable {var} is set.")
+
+    # Additional validation can be added here (e.g., format checks)
+    # Example: Check if GMAIL_API_KEY has expected format
+    if settings.GMAIL_API_KEY and not settings.GMAIL_API_KEY.startswith("AIza"):
+        logger.warning("GMAIL_API_KEY format is unexpected.")
+
+# Call the validation function at module load
+validate_env_variables()
 
 # ------------------------- Caching Mechanism ----------------------------
 
@@ -115,7 +118,7 @@ class GCPClients:
     gcs_client: Optional[storage.Client] = None
     vision_client: Optional[vision.ImageAnnotatorClient] = None
     document_ai_client: Optional[documentai.DocumentProcessorServiceClient] = None
-    bigquery_client: Optional[bigquery.Client] = None  # Added BigQuery client
+    bigquery_client: Optional[bigquery.Client] = None  # BigQuery client
     _lock: asyncio.Lock = asyncio.Lock()
 
     @classmethod
@@ -186,23 +189,50 @@ class GCPClients:
 async def resilient_api_call(func, *args, **kwargs):
     """
     Executes a function in a thread and handles HTTP errors.
+    Implements retries for transient errors with exponential backoff.
     """
-    try:
-        return await asyncio.to_thread(func, *args, **kwargs)
-    except HttpError as e:
-        logger.error(
-            "HTTP error during API call.",
-            exc_info=True,
-            extra={"error_code": e.resp.status}
-        )
-        raise GCPError(f"HTTP error: {e}")
-    except Exception as e:
-        logger.error(
-            "Unexpected error during API call.",
-            exc_info=True,
-            extra={"error": str(e)}
-        )
-        raise GCPError("Unexpected error during API call.")
+    max_retries = 5  # Number of retries
+    initial_delay = 1  # Initial delay in seconds
+    backoff_factor = 2  # Exponential backoff factor
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            return await asyncio.to_thread(func, *args, **kwargs)
+        except HttpError as e:
+            status = e.resp.status
+            if status in [429, 500, 502, 503, 504]:
+                # Transient errors, retry
+                delay = initial_delay * (backoff_factor ** (attempt - 1))
+                logger.warning(
+                    f"Transient HTTP error {status} encountered. Retrying in {delay} seconds... (Attempt {attempt}/{max_retries})",
+                    extra={"error_code": status}
+                )
+                await asyncio.sleep(delay)
+                continue
+            else:
+                # Non-retriable error
+                logger.error(
+                    "Non-retriable HTTP error during API call.",
+                    exc_info=True,
+                    extra={"error_code": status}
+                )
+                raise GCPError(f"HTTP error: {e}")
+        except Exception as e:
+            # For other exceptions, decide if retry is appropriate
+            delay = initial_delay * (backoff_factor ** (attempt - 1))
+            logger.warning(
+                f"Unexpected error encountered. Retrying in {delay} seconds... (Attempt {attempt}/{max_retries})",
+                exc_info=True,
+                extra={"error": str(e)}
+            )
+            await asyncio.sleep(delay)
+            continue
+    # After all retries have been exhausted
+    logger.error(
+        "Maximum retry attempts reached. Operation failed.",
+        extra={"function": func.__name__}
+    )
+    raise ServerError("Maximum retry attempts reached.")
 
 # ------------------------- Caching Functions -----------------------------
 
@@ -281,6 +311,7 @@ SUPPORTED_MIME_TYPES = [
 def validate_mime_type(mime_type: str):
     """
     Validates if the MIME type is supported.
+    Logs a warning for unsupported MIME types.
     """
     if mime_type not in SUPPORTED_MIME_TYPES and not mime_type.startswith('image/'):
         logger.warning("Unsupported MIME type detected.", extra={"mime_type": mime_type})
@@ -337,7 +368,7 @@ async def process_image(gcs_uri: str) -> str:
         )
         raise ServerError(f"Vision AI processing failed for {gcs_uri}.")
 
-async def process_attachment(attachment: Attachment) -> Optional[Dict[str, Any]]:
+async def process_attachment(attachment: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """
     Processes an attachment by uploading to GCS and extracting relevant information.
     """
@@ -354,8 +385,9 @@ async def process_attachment(attachment: Attachment) -> Optional[Dict[str, Any]]
         elif mime_type.startswith('image/'):
             extracted_text = await process_image(gcs_uri)
         else:
-            logger.info(
-                "Skipping unsupported attachment type.",
+            # This should already be handled by validate_mime_type, but added as an extra safeguard
+            logger.warning(
+                "Unsupported MIME type encountered during processing.",
                 extra={"mime_type": mime_type, "filename": filename}
             )
             return None
@@ -370,6 +402,9 @@ async def process_attachment(attachment: Attachment) -> Optional[Dict[str, Any]]
             "attachment_size": attachment_size,
             "gcs_uri": gcs_uri
         }
+    except InvalidInputError:
+        # Already logged in validate_mime_type
+        return None
     except Exception as e:
         logger.error(
             f"{ERROR_CODES['gcp_error']}: Failed to process attachment {filename}.",
@@ -683,7 +718,7 @@ async def process_email(email_id: str, creds: Credentials) -> Dict[str, Any]:
         attachments = email_content.get('attachments', [])
         semaphore = asyncio.Semaphore(settings.MAX_CONCURRENT_TASKS)
 
-        async def handle_attachment(att: Attachment) -> Optional[Dict[str, Any]]:
+        async def handle_attachment(att: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             async with semaphore:
                 file_name, file_content = att['filename'], att['data']
                 # Upload to GCS
@@ -713,16 +748,12 @@ async def process_email(email_id: str, creds: Credentials) -> Dict[str, Any]:
         )
         raise ParseError(f"Failed to process email ID {email_id}: {e}")
 
-# ------------------------- Helper Functions --------------------------------
-
-# Removed the redundant get_gcs_client function to prevent recursion.
-
 # ------------------------- BigQuery Insertion Functions --------------------
 
 async def insert_raw_parsed_output(
     email_id: str,
     raw_output: str,
-    bigquery_client: bigquery.Client,  # Corrected type annotation
+    bigquery_client: bigquery.Client,
     parser_version: str = "1.0"
 ):
     """
@@ -752,7 +783,7 @@ async def insert_raw_parsed_output(
 
 async def insert_emails_table(
     email_content: Dict[str, Any],
-    bigquery_client: bigquery.Client  # Corrected type annotation
+    bigquery_client: bigquery.Client
 ):
     """
     Inserts email content into BigQuery emails_table.
@@ -767,12 +798,15 @@ async def insert_emails_table(
             "gcs_uri": att.get('gcs_uri')
         } for att in attachments
     ]
+    recipient_emails = email_content.get("metadata", {}).get("recipients", "")
+    recipient_emails = [email.strip() for email in recipient_emails.split(",")] if recipient_emails else []
+
     rows_to_insert = [{
         "email_id": email_content.get("message_id"),
         "thread_id": email_content.get("thread_id"),
         "received_timestamp": datetime.utcnow(),  # Adjust as needed
         "sender_email": email_content.get("metadata", {}).get("sender"),
-        "recipient_email": email_content.get("metadata", {}).get("recipients", "").split(", "),  # Assuming comma-separated
+        "recipient_email": recipient_emails,
         "subject": email_content.get("metadata", {}).get("subject"),
         "email_body": email_content.get("body", ""),
         "attachments": formatted_attachments,
@@ -800,7 +834,7 @@ async def insert_assignments_table(
     insured_name: Optional[str],
     adjuster: Optional[str],
     email_id: Optional[str],
-    bigquery_client: bigquery.Client  # Corrected type annotation
+    bigquery_client: bigquery.Client
 ):
     """
     Inserts assignment data into BigQuery assignments table.
@@ -832,5 +866,98 @@ async def insert_assignments_table(
             exc_info=True
         )
         raise ServerError(f"Failed to insert assignments data for claim number {claim_number}. {e}")
+
+# ------------------------- Batch Processing Functions ----------------------
+
+async def process_email_batch(email_ids: List[str], creds: Credentials) -> List[Dict[str, Any]]:
+    """
+    Processes a batch of emails, ensuring batching logic aligns with prompts.yaml.
+    Splits batches if max_tokens limit is exceeded.
+    """
+    batch_size = settings.BATCH_PROCESSING.get('batch_size', 100)
+    max_tokens = settings.AI.get('generative_ai', {}).get('google', {}).get('max_tokens', 250000)
+    batches = [email_ids[i:i + batch_size] for i in range(0, len(email_ids), batch_size)]
+    processed_results = []
+
+    for batch in batches:
+        # Here, you would implement logic to estimate token counts
+        # For simplicity, assuming each email contributes a fixed number of tokens
+        estimated_tokens = len(batch) * settings.AI.get('generative_ai', {}).get('google', {}).get('max_tokens', 250000) // batch_size
+        if estimated_tokens > max_tokens:
+            # Further split the batch
+            sub_batches = [batch[i:i + batch_size // 2] for i in range(0, len(batch), batch_size // 2)]
+            for sub_batch in sub_batches:
+                processed_results.extend(await fetch_email_batch(sub_batch, creds))
+        else:
+            processed_results.extend(await fetch_email_batch(batch, creds))
+        logger.info(f"Processed batch of {len(batch)} emails.")
+    
+    return processed_results
+
+# ------------------------- Data Validation Functions -----------------------
+
+def validate_bigquery_schema(parsed_output: Dict[str, Any], schema: List[Dict[str, Any]]) -> bool:
+    """
+    Validates the parsed output against the provided BigQuery schema.
+    Logs warnings or errors for missing required fields.
+    """
+    schema_fields = {field['name']: field for field in schema}
+    missing_required_fields = [field for field in schema_fields.values() if field['mode'] == 'REQUIRED' and field['name'] not in parsed_output]
+    
+    if missing_required_fields:
+        missing_fields = ", ".join(field['name'] for field in missing_required_fields)
+        logger.error(f"Parsed output is missing required fields: {missing_fields}")
+        return False
+    # Additional type validations can be implemented here
+    return True
+
+async def validate_and_insert(parsed_output: Dict[str, Any], bigquery_client: bigquery.Client):
+    """
+    Validates the parsed output against all BigQuery schemas and inserts them.
+    Throws warnings or errors if validation fails.
+    """
+    # Load schemas
+    assignments_schema_path = "assignments_table_schema.json"
+    emails_schema_path = "emails_table_schema.json"
+    raw_parsed_output_schema_path = "raw_parsed_output_schema.json"
+
+    try:
+        with open(assignments_schema_path, 'r') as f:
+            assignments_schema = json.load(f)
+        with open(emails_schema_path, 'r') as f:
+            emails_schema = json.load(f)
+        with open(raw_parsed_output_schema_path, 'r') as f:
+            raw_parsed_output_schema = json.load(f)
+    except Exception as e:
+        logger.error("Failed to load BigQuery schemas.", exc_info=True)
+        raise ServerError("Failed to load BigQuery schemas.") from e
+
+    # Validate parsed_output against each schema
+    if not validate_bigquery_schema(parsed_output, assignments_schema):
+        logger.warning("Parsed output does not conform to assignments_table schema.")
+    if not validate_bigquery_schema(parsed_output, emails_schema):
+        logger.warning("Parsed output does not conform to emails_table schema.")
+    if not validate_bigquery_schema(parsed_output, raw_parsed_output_schema):
+        logger.warning("Parsed output does not conform to raw_parsed_output schema.")
+    
+    # Insert into BigQuery tables
+    await insert_raw_parsed_output(
+        email_id=parsed_output.get("email_id"),
+        raw_output=json.dumps(parsed_output),
+        bigquery_client=bigquery_client
+    )
+    await insert_emails_table(
+        email_content=parsed_output,
+        bigquery_client=bigquery_client
+    )
+    await insert_assignments_table(
+        claim_number=parsed_output.get("claim_number"),
+        date_of_loss=parsed_output.get("date_of_loss"),
+        policy_number=parsed_output.get("policy_number"),
+        insured_name=parsed_output.get("insured_name"),
+        adjuster=parsed_output.get("assigner_name"),
+        email_id=parsed_output.get("email_id"),
+        bigquery_client=bigquery_client
+    )
 
 # ------------------------- End of File -------------------------------------
